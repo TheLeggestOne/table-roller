@@ -189,7 +189,7 @@ This will:
 1. Roll on the "Encounters" table
 2. Roll on the "MerchantGoods" table  
 3. Roll on the "Treasure" table
-4. Return all three results separately
+4. Return all three results as separate, independent entries
 
 You can add modifiers to individual tables:
 
@@ -197,9 +197,9 @@ You can add modifiers to individual tables:
 node index.js roll "BuildingType+2,Size-1,Occupants"
 ```
 
-### Table Chaining (Related Rolls)
+### Table Chaining (Nested Results)
 
-Chain tables using the `>` operator for related, sequential results:
+Chain tables using the `>` operator to nest results hierarchically:
 
 ```bash
 node index.js roll "Encounters>WildBeasts"
@@ -207,8 +207,10 @@ node index.js roll "Encounters>WildBeasts"
 
 This will:
 1. Roll on the "Encounters" table
-2. Based on that result, roll on the "WildBeasts" table
-3. Return both results linked together
+2. Roll on the "WildBeasts" table
+3. Display the WildBeasts result nested under the Encounters result
+
+**Key difference**: Chaining doesn't change the rolling mechanics—it only affects how results are displayed in the output. Chained results are indented/nested to show that the second table is a detail or expansion of the first table's result.
 
 ### Auto-Reroll Tables
 
