@@ -1,4 +1,4 @@
-# Table Helper
+# Table Roller
 
 A Node.js program for managing markdown tables with random rolling, table chaining, modifiers, and duplicate prevention.
 
