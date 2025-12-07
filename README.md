@@ -318,4 +318,4 @@ Roll results include:
 
 ## License
 
-MIT
+GNU GENERAL PUBLIC LICENSE
