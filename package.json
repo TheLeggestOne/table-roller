@@ -1,0 +1,17 @@
+{
+  "name": "table-helper",
+  "version": "1.0.0",
+  "description": "Markdown table manager with random rolling and chaining capabilities",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "start": "node index.js",
+    "test": "node test.js",
+    "roll": "node index.js roll",
+    "load": "node index.js load",
+    "dice": "node index.js dice"
+  },
+  "keywords": ["markdown", "tables", "random", "dice", "rpg"],
+  "author": "",
+  "license": "MIT"
+}
