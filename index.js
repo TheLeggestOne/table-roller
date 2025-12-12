@@ -1,7 +1,10 @@
-import fs from 'fs';
-import { TableHelper } from './tableHelper.js';
+import { RuntimeAdapter } from './src/services/runtime/index.js';
+import { TableRollerCore } from './src/services/core/index.js';
 
-const helper = new TableHelper();
+// Initialize for standalone/CLI mode
+const runtime = new RuntimeAdapter('standalone');
+await runtime.initialize();
+const roller = new TableRollerCore(runtime);
 
 // Example usage
 if (process.argv.length > 2) {
@@ -11,8 +14,8 @@ if (process.argv.length > 2) {
     // Load all tables from tables/ directory
     const tablesDir = process.argv[3] || './tables';
     try {
-      helper.loadTablesSync(tablesDir);
-      console.log('Loaded tables:', helper.getTableNames().join(', '));
+      await roller.loadTables(tablesDir);
+      console.log('Loaded tables:', roller.getTableNames().join(', '));
     } catch (error) {
       console.error('Error:', error.message);
     }
@@ -41,17 +44,18 @@ if (process.argv.length > 2) {
     }
     
     try {
-      helper.loadTablesSync('./tables');
-      const result = helper.roll(tableExpression, 'default', 100, modifier);
+      await roller.loadTables('./tables');
+      const result = roller.roll(tableExpression, 'default', 100, modifier);
       console.log('\nRoll Result:');
-      console.log(helper.formatResult(result));
+      console.log(roller.formatResult(result));
     } catch (error) {
       console.error('Error:', error.message);
     }
   } else if (command === 'dice') {
     // Roll simple dice
     const notation = process.argv[3] || '1d6';
-    const result = helper.rollDice(notation);
+    const { DiceRoller } = await import('./src/services/dice/index.js');
+    const result = DiceRoller.roll(notation);
     console.log(`${notation}: ${result}`);
   } else {
     printUsage();

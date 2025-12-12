@@ -10,9 +10,21 @@
     "roll": "node index.js roll",
     "load": "node index.js load",
     "dice": "node index.js dice",
+    "dev": "node esbuild.config.mjs",
+    "build": "node esbuild.config.mjs production",
     "version": "node version-bump.mjs && git add manifest.json versions.json"
   },
-  "keywords": ["markdown", "tables", "random", "dice", "rpg"],
+  "keywords": [
+    "markdown",
+    "tables",
+    "random",
+    "dice",
+    "rpg"
+  ],
   "author": "",
-  "license": "MIT"
+  "license": "MIT",
+  "devDependencies": {
+    "builtin-modules": "^5.0.0",
+    "esbuild": "^0.27.1"
+  }
 }

@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Tracks rolled results and prevents duplicates
  */
 export class SessionTracker {

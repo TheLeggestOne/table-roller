@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Parses markdown tables from text
  */
 export class TableParser {
