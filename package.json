@@ -9,7 +9,8 @@
     "test": "node test.js",
     "roll": "node index.js roll",
     "load": "node index.js load",
-    "dice": "node index.js dice"
+    "dice": "node index.js dice",
+    "version": "node version-bump.mjs && git add manifest.json versions.json"
   },
   "keywords": ["markdown", "tables", "random", "dice", "rpg"],
   "author": "",
