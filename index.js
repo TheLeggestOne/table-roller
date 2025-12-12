@@ -14,7 +14,7 @@ if (process.argv.length > 2) {
     // Load all tables from tables/ directory
     const tablesDir = process.argv[3] || './tables';
     try {
-      await roller.loadTables(tablesDir);
+      await roller.loadTables({ dir: tablesDir });
       console.log('Loaded tables:', roller.getTableNames().join(', '));
     } catch (error) {
       console.error('Error:', error.message);
@@ -44,7 +44,7 @@ if (process.argv.length > 2) {
     }
     
     try {
-      await roller.loadTables('./tables');
+      await roller.loadTables({ dir: './tables' });
       const result = roller.roll(tableExpression, 'default', 100, modifier);
       console.log('\nRoll Result:');
       console.log(roller.formatResult(result));
