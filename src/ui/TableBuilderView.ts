@@ -192,6 +192,10 @@ export class TableBuilderView extends ItemView {
 	 * Builds the toolbar with undo/redo and bulk operations
 	 */
 	private buildToolbar(toolbar: HTMLElement): void {
+		// New Table button
+		const newTableBtn = toolbar.createEl('button', { text: 'New Table', cls: 'table-builder-btn' });
+		newTableBtn.addEventListener('click', () => this.handleNewTable());
+		
 		// Undo button
 		const undoButton = toolbar.createEl('button', { text: 'Undo', cls: 'table-builder-btn' });
 		undoButton.addEventListener('click', () => this.handleUndo());
@@ -372,6 +376,38 @@ export class TableBuilderView extends ItemView {
 		};
 		this.stateManager.setState(newState);
 		this.markUnsaved();
+	}
+
+	/**
+	 * Handles new table button click - resets to default state
+	 */
+	private handleNewTable(): void {
+		if (this.hasUnsavedChanges) {
+			// Confirm before resetting if there are unsaved changes
+			const modal = new ConfirmModal(
+				this.app,
+				'Create New Table?',
+				'You have unsaved changes. Creating a new table will discard them. Continue?',
+				() => this.resetToDefaultState(),
+				{ isDangerous: true }
+			);
+			modal.open();
+		} else {
+			this.resetToDefaultState();
+		}
+	}
+
+	/**
+	 * Resets the table to default state
+	 */
+	private resetToDefaultState(): void {
+		const defaultState = getDefaultState();
+		this.stateManager.setState(defaultState);
+		this.currentFile = null;
+		this.tableIO.setCurrentFile(null);
+		this.hasUnsavedChanges = false;
+		this.leaf.setViewState({ ...this.leaf.getViewState() });
+		new Notice('Created new table');
 	}
 
 	/**

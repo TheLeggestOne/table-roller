@@ -2846,6 +2846,8 @@ var TableBuilderView = class extends import_obsidian5.ItemView {
    * Builds the toolbar with undo/redo and bulk operations
    */
   buildToolbar(toolbar) {
+    const newTableBtn = toolbar.createEl("button", { text: "New Table", cls: "table-builder-btn" });
+    newTableBtn.addEventListener("click", () => this.handleNewTable());
     const undoButton = toolbar.createEl("button", { text: "Undo", cls: "table-builder-btn" });
     undoButton.addEventListener("click", () => this.handleUndo());
     const redoButton = toolbar.createEl("button", { text: "Redo", cls: "table-builder-btn" });
@@ -2989,6 +2991,35 @@ var TableBuilderView = class extends import_obsidian5.ItemView {
     };
     this.stateManager.setState(newState);
     this.markUnsaved();
+  }
+  /**
+   * Handles new table button click - resets to default state
+   */
+  handleNewTable() {
+    if (this.hasUnsavedChanges) {
+      const modal = new ConfirmModal(
+        this.app,
+        "Create New Table?",
+        "You have unsaved changes. Creating a new table will discard them. Continue?",
+        () => this.resetToDefaultState(),
+        { isDangerous: true }
+      );
+      modal.open();
+    } else {
+      this.resetToDefaultState();
+    }
+  }
+  /**
+   * Resets the table to default state
+   */
+  resetToDefaultState() {
+    const defaultState = getDefaultState();
+    this.stateManager.setState(defaultState);
+    this.currentFile = null;
+    this.tableIO.setCurrentFile(null);
+    this.hasUnsavedChanges = false;
+    this.leaf.setViewState({ ...this.leaf.getViewState() });
+    new import_obsidian5.Notice("Created new table");
   }
   /**
    * Handles undo button click
