@@ -1,6 +1,7 @@
 import { Plugin } from 'obsidian';
 import { TableRollerCore } from './src/services/TableRollerCore';
 import { TableSelectorModal, RollResultModal, ErrorModal } from './src/ui/modals';
+import { TableBuilderView, VIEW_TYPE_TABLE_BUILDER } from './src/ui/TableBuilderView';
 
 export default class TableRollerPlugin extends Plugin {
 	private roller: TableRollerCore;
@@ -10,6 +11,12 @@ export default class TableRollerPlugin extends Plugin {
 
 		this.roller = new TableRollerCore(this.app);
 
+		// Register the table builder view
+		this.registerView(
+			VIEW_TYPE_TABLE_BUILDER,
+			(leaf) => new TableBuilderView(leaf, this.roller)
+		);
+
 		// Load tables on startup
 		try {
 			await this.roller.loadTables();
@@ -18,6 +25,26 @@ export default class TableRollerPlugin extends Plugin {
 		}
 
 		// Register commands
+		this.addCommand({
+			id: 'open-table-builder',
+			name: 'Create/Edit Table',
+			callback: async () => {
+				const leaf = this.app.workspace.getLeaf('tab');
+				await leaf.setViewState({
+					type: VIEW_TYPE_TABLE_BUILDER,
+					active: true
+				});
+			}
+		});
+
+		this.addRibbonIcon('table', 'Create/Edit Table', async () => {
+			const leaf = this.app.workspace.getLeaf('tab');
+			await leaf.setViewState({
+				type: VIEW_TYPE_TABLE_BUILDER,
+				active: true
+			});
+		});
+
 		this.addCommand({
 			id: 'roll-on-table',
 			name: 'Roll on table',

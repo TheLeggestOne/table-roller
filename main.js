@@ -27,7 +27,7 @@ __export(main_exports, {
   default: () => TableRollerPlugin
 });
 module.exports = __toCommonJS(main_exports);
-var import_obsidian2 = require("obsidian");
+var import_obsidian3 = require("obsidian");
 
 // src/services/TableParser.ts
 var TableParser = class {
@@ -962,16 +962,1567 @@ var ErrorModal = class extends import_obsidian.Modal {
   }
 };
 
+// src/ui/TableBuilderView.ts
+var import_obsidian2 = require("obsidian");
+var VIEW_TYPE_TABLE_BUILDER = "table-builder";
+var TableBuilderView = class extends import_obsidian2.ItemView {
+  constructor(leaf, roller) {
+    super(leaf);
+    this.hasUnsavedChanges = false;
+    this.selectedRowIndex = 0;
+    this.currentFile = null;
+    // History for undo/redo
+    this.history = [];
+    this.historyIndex = -1;
+    this.MAX_HISTORY = 50;
+    // Debounce timer for preview updates
+    this.previewUpdateTimer = null;
+    // Drag and drop for columns
+    this.draggedColumnIndex = -1;
+    this.roller = roller;
+    this.state = this.getDefaultState();
+  }
+  getViewType() {
+    return VIEW_TYPE_TABLE_BUILDER;
+  }
+  getDisplayText() {
+    const asterisk = this.hasUnsavedChanges ? "*" : "";
+    return `Table Builder${asterisk}`;
+  }
+  getIcon() {
+    return "table";
+  }
+  async onOpen() {
+    const container = this.containerEl.children[1];
+    container.empty();
+    container.addClass("table-builder-view");
+    const splitContainer = container.createDiv({ cls: "table-builder-split" });
+    this.leftPanel = splitContainer.createDiv({ cls: "table-builder-left-panel" });
+    this.rightPanel = splitContainer.createDiv({ cls: "table-builder-right-panel" });
+    this.buildLeftPanel();
+    this.buildRightPanel();
+    this.applyStyles();
+  }
+  async onClose() {
+    if (this.hasUnsavedChanges) {
+      console.warn("Closing Table Builder with unsaved changes");
+    }
+  }
+  getDefaultState() {
+    return {
+      tableName: "New Table",
+      columns: [
+        { name: "d6", type: "dice", diceNotation: "d6" },
+        { name: "Result", type: "regular" }
+      ],
+      rows: this.generateDefaultRows("d6", 6),
+      isPrivate: false
+    };
+  }
+  generateDefaultRows(diceNotation, count) {
+    const rows = [];
+    const match = diceNotation.match(/^(\d*)d(\d+)$/i);
+    if (!match)
+      return rows;
+    const sides = parseInt(match[2]);
+    if (sides <= 20) {
+      for (let i = 1; i <= Math.min(sides, count); i++) {
+        rows.push({ range: `${i}` });
+      }
+    } else if (sides === 100) {
+      const rangeSize = Math.floor(sides / count);
+      for (let i = 0; i < count; i++) {
+        const start = i * rangeSize + 1;
+        const end = i === count - 1 ? sides : (i + 1) * rangeSize;
+        rows.push({ range: `${start}-${end}` });
+      }
+    } else {
+      for (let i = 1; i <= Math.min(sides, count); i++) {
+        rows.push({ range: `${i}` });
+      }
+    }
+    return rows;
+  }
+  buildLeftPanel() {
+    const toolbar = this.leftPanel.createDiv({ cls: "table-builder-toolbar" });
+    const undoButton = toolbar.createEl("button", { text: "Undo", cls: "table-builder-btn" });
+    undoButton.addEventListener("click", () => this.undo());
+    const redoButton = toolbar.createEl("button", { text: "Redo", cls: "table-builder-btn" });
+    redoButton.addEventListener("click", () => this.redo());
+    const duplicateBtn = toolbar.createEl("button", { text: "Duplicate Row", cls: "table-builder-btn" });
+    duplicateBtn.addEventListener("click", () => this.duplicateRow());
+    const deleteRowBtn = toolbar.createEl("button", { text: "Delete Row", cls: "table-builder-btn" });
+    deleteRowBtn.addEventListener("click", () => this.deleteRow());
+    const clearResultsBtn = toolbar.createEl("button", { text: "Clear Results", cls: "table-builder-btn" });
+    clearResultsBtn.addEventListener("click", () => this.clearResults());
+    const deleteAllBtn = toolbar.createEl("button", { text: "Delete All Rows", cls: "table-builder-btn" });
+    deleteAllBtn.addEventListener("click", () => this.deleteAllRows());
+    const nameSection = this.leftPanel.createDiv({ cls: "table-builder-section" });
+    nameSection.createEl("label", { text: "Table Name:" });
+    this.tableNameInput = nameSection.createEl("input", { type: "text", value: this.state.tableName });
+    this.tableNameInput.addEventListener("input", () => {
+      this.captureState();
+      this.state.tableName = this.tableNameInput.value;
+      this.markUnsaved();
+      this.schedulePreviewUpdate();
+    });
+    const columnsSection = this.leftPanel.createDiv({ cls: "table-builder-section" });
+    columnsSection.createEl("h3", { text: "Columns" });
+    this.buildColumnsEditor(columnsSection);
+    const directivesSection = this.leftPanel.createDiv({ cls: "table-builder-section" });
+    directivesSection.createEl("h3", { text: "Directives" });
+    this.buildDirectivesEditor(directivesSection);
+    const rowsSection = this.leftPanel.createDiv({ cls: "table-builder-section" });
+    rowsSection.createEl("h3", { text: "Rows" });
+    this.rowGrid = rowsSection.createDiv({ cls: "table-builder-row-grid" });
+    this.buildRowGrid();
+    const addRowBtn = rowsSection.createEl("button", { text: "+ Add Row", cls: "table-builder-btn" });
+    addRowBtn.addEventListener("click", () => this.addRow());
+    this.buildExamplesSidebar(this.leftPanel);
+  }
+  buildColumnsEditor(container) {
+    const columnsList = container.createDiv({ cls: "columns-list" });
+    this.state.columns.forEach((col, index) => {
+      const colItem = columnsList.createDiv({ cls: "column-item" });
+      const dragHandle = colItem.createDiv({ cls: "drag-handle", text: "\u22EE\u22EE" });
+      dragHandle.draggable = true;
+      dragHandle.addEventListener("dragstart", (e) => this.onColumnDragStart(e, index));
+      dragHandle.addEventListener("dragover", (e) => this.onColumnDragOver(e));
+      dragHandle.addEventListener("drop", (e) => this.onColumnDrop(e, index));
+      const nameInput = colItem.createEl("input", {
+        type: "text",
+        value: col.name,
+        placeholder: "Column name"
+      });
+      nameInput.addEventListener("input", () => {
+        this.captureState();
+        col.name = nameInput.value;
+        this.markUnsaved();
+        this.buildRowGrid();
+        this.schedulePreviewUpdate();
+      });
+      const typeLabel = colItem.createSpan({ text: `(${col.type})`, cls: "column-type" });
+      if (this.state.columns.length > 1) {
+        const deleteBtn = colItem.createEl("button", { text: "\xD7", cls: "delete-btn" });
+        deleteBtn.addEventListener("click", () => this.deleteColumn(index));
+      }
+    });
+    const addBtns = container.createDiv({ cls: "add-column-btns" });
+    const addDiceBtn = addBtns.createEl("button", { text: "+ Dice Column", cls: "table-builder-btn" });
+    addDiceBtn.addEventListener("click", () => this.addDiceColumn());
+    const addRegularBtn = addBtns.createEl("button", { text: "+ Regular Column", cls: "table-builder-btn" });
+    addRegularBtn.addEventListener("click", () => this.addColumn("regular"));
+    const addRerollBtn = addBtns.createEl("button", { text: "+ Reroll Column", cls: "table-builder-btn" });
+    addRerollBtn.addEventListener("click", () => this.addColumn("reroll"));
+  }
+  buildDirectivesEditor(container) {
+    const privateDiv = container.createDiv({ cls: "directive-item" });
+    const privateLabel = privateDiv.createEl("label");
+    const privateCheckbox = privateLabel.createEl("input", { type: "checkbox" });
+    privateCheckbox.checked = this.state.isPrivate;
+    privateLabel.appendText(" Private (hide from table picker)");
+    privateCheckbox.addEventListener("change", () => {
+      this.captureState();
+      this.state.isPrivate = privateCheckbox.checked;
+      this.markUnsaved();
+      this.schedulePreviewUpdate();
+    });
+    const rerollDiv = container.createDiv({ cls: "directive-item" });
+    rerollDiv.createEl("label", { text: "Table-level Reroll:" });
+    const rerollInput = rerollDiv.createEl("input", {
+      type: "text",
+      placeholder: "Table1,Table2 or d6 Table1",
+      value: this.state.tableReroll || ""
+    });
+    rerollInput.addEventListener("input", () => {
+      this.captureState();
+      this.state.tableReroll = rerollInput.value || void 0;
+      this.markUnsaved();
+      this.schedulePreviewUpdate();
+    });
+    rerollInput.addEventListener("blur", () => {
+      if (this.state.tableReroll) {
+        this.validateRerollReference(this.state.tableReroll);
+      }
+    });
+  }
+  buildRowGrid() {
+    this.rowGrid.empty();
+    const headerRow = this.rowGrid.createDiv({ cls: "row-grid-header" });
+    headerRow.createDiv({ text: "", cls: "row-number" });
+    this.state.columns.forEach((col) => {
+      headerRow.createDiv({ text: col.name, cls: "grid-cell" });
+    });
+    this.state.rows.forEach((row, rowIndex) => {
+      const rowEl = this.rowGrid.createDiv({ cls: "row-grid-row" });
+      if (rowIndex === this.selectedRowIndex) {
+        rowEl.addClass("selected");
+      }
+      const rowNum = rowEl.createDiv({ text: `${rowIndex + 1}`, cls: "row-number" });
+      rowNum.addEventListener("click", () => {
+        this.selectedRowIndex = rowIndex;
+        this.updateRowSelection();
+      });
+      this.state.columns.forEach((col, colIndex) => {
+        const cellKey = col.type === "dice" ? "range" : col.name;
+        const cellValue = row[cellKey] || "";
+        const cell = rowEl.createDiv({ cls: "grid-cell" });
+        const input = cell.createEl("input", {
+          type: "text",
+          value: cellValue,
+          placeholder: col.type === "dice" ? "1-6" : "Value"
+        });
+        input.addEventListener("focus", () => {
+          if (this.selectedRowIndex !== rowIndex) {
+            this.selectedRowIndex = rowIndex;
+            this.updateRowSelection();
+          }
+        });
+        input.addEventListener("input", () => {
+          row[cellKey] = input.value;
+          this.markUnsaved();
+          this.schedulePreviewUpdate();
+        });
+        input.addEventListener("blur", () => {
+          this.captureState();
+        });
+        input.addEventListener("keydown", (e) => {
+          this.handleCellKeydown(e, rowIndex, colIndex);
+        });
+        if (col.type === "reroll") {
+          input.addEventListener("blur", () => {
+            if (input.value && input.value !== "\u2014" && input.value !== "-") {
+              this.validateRerollReference(input.value);
+            }
+          });
+        }
+      });
+    });
+  }
+  buildExamplesSidebar(container) {
+    const sidebar = container.createDiv({ cls: "examples-sidebar" });
+    const toggle = sidebar.createEl("details");
+    toggle.createEl("summary", { text: "Examples & Templates" });
+    const content = toggle.createDiv({ cls: "examples-content" });
+    content.createEl("h4", { text: "Presets" });
+    const examples = [
+      { name: "Individual d6 (6 rows)", dice: "d6", count: 6 },
+      { name: "Individual d20 (20 rows)", dice: "d20", count: 20 },
+      { name: "Range d100 (10 rows)", dice: "d100", count: 10 },
+      { name: "Weighted d100 (20 rows)", dice: "d100", count: 20 }
+    ];
+    examples.forEach((example) => {
+      const btn = content.createEl("button", {
+        text: example.name,
+        cls: "example-btn"
+      });
+      btn.addEventListener("click", () => this.applyExample(example.dice, example.count));
+    });
+    content.createEl("h4", { text: "Custom Templates" });
+    content.createEl("p", { text: "No templates saved yet.", cls: "placeholder-text" });
+    const saveTemplateBtn = content.createEl("button", {
+      text: "Save as Template",
+      cls: "table-builder-btn"
+    });
+    saveTemplateBtn.addEventListener("click", () => this.saveAsTemplate());
+  }
+  buildRightPanel() {
+    const tabs = this.rightPanel.createDiv({ cls: "preview-tabs" });
+    const markdownTab = tabs.createEl("button", { text: "Markdown", cls: "tab-btn active" });
+    const htmlTab = tabs.createEl("button", { text: "Preview", cls: "tab-btn" });
+    this.previewContainer = this.rightPanel.createDiv({ cls: "preview-container" });
+    this.markdownPreview = this.previewContainer.createDiv({ cls: "markdown-preview active" });
+    this.htmlPreview = this.previewContainer.createDiv({ cls: "html-preview" });
+    markdownTab.addEventListener("click", () => {
+      markdownTab.addClass("active");
+      htmlTab.removeClass("active");
+      this.markdownPreview.addClass("active");
+      this.htmlPreview.removeClass("active");
+    });
+    htmlTab.addEventListener("click", () => {
+      htmlTab.addClass("active");
+      markdownTab.removeClass("active");
+      this.htmlPreview.addClass("active");
+      this.markdownPreview.removeClass("active");
+    });
+    const exportBtns = this.rightPanel.createDiv({ cls: "export-buttons" });
+    const copyBtn = exportBtns.createEl("button", { text: "Copy to Clipboard", cls: "table-builder-btn" });
+    copyBtn.addEventListener("click", () => this.copyToClipboard());
+    const saveBtn = exportBtns.createEl("button", { text: "Save", cls: "table-builder-btn" });
+    saveBtn.addEventListener("click", async () => await this.save());
+    const saveAsBtn = exportBtns.createEl("button", { text: "Save As...", cls: "table-builder-btn" });
+    saveAsBtn.addEventListener("click", async () => await this.saveAs());
+    const loadBtn = exportBtns.createEl("button", { text: "Load Table", cls: "table-builder-btn" });
+    loadBtn.addEventListener("click", () => this.loadTable());
+    const importBtn = exportBtns.createEl("button", { text: "Import from Clipboard", cls: "table-builder-btn" });
+    importBtn.addEventListener("click", () => this.importFromClipboard());
+    const exportDropdown = exportBtns.createEl("select", { cls: "export-format" });
+    exportDropdown.createEl("option", { text: "Markdown", value: "md" });
+    exportDropdown.createEl("option", { text: "CSV", value: "csv" });
+    exportDropdown.createEl("option", { text: "JSON", value: "json" });
+    const exportFileBtn = exportBtns.createEl("button", { text: "Export As...", cls: "table-builder-btn" });
+    exportFileBtn.addEventListener("click", () => {
+      const format = exportDropdown.value;
+      this.exportAs(format);
+    });
+    this.updatePreview();
+  }
+  schedulePreviewUpdate() {
+    if (this.previewUpdateTimer) {
+      clearTimeout(this.previewUpdateTimer);
+    }
+    this.previewUpdateTimer = setTimeout(() => {
+      this.updatePreview();
+    }, 300);
+  }
+  updatePreview() {
+    const markdown = this.generateMarkdown();
+    this.markdownPreview.empty();
+    const pre = this.markdownPreview.createEl("pre");
+    pre.createEl("code", { text: markdown });
+    this.htmlPreview.empty();
+    this.renderHTMLPreview(this.htmlPreview);
+  }
+  generateMarkdown() {
+    const lines = [];
+    lines.push("---");
+    lines.push("table-roller: true");
+    lines.push("---");
+    lines.push("");
+    lines.push(`# ${this.state.tableName}`);
+    lines.push("");
+    if (this.state.isPrivate) {
+      lines.push("private: true");
+    }
+    if (this.state.tableReroll) {
+      lines.push(`reroll: ${this.state.tableReroll}`);
+    }
+    if (this.state.isPrivate || this.state.tableReroll) {
+      lines.push("");
+    }
+    const headers = this.state.columns.map((col) => col.name);
+    lines.push("| " + headers.join(" | ") + " |");
+    lines.push("|" + headers.map(() => "----").join("|") + "|");
+    this.state.rows.forEach((row) => {
+      const cells = this.state.columns.map((col) => {
+        const key = col.type === "dice" ? "range" : col.name;
+        return row[key] || "";
+      });
+      lines.push("| " + cells.join(" | ") + " |");
+    });
+    return lines.join("\n");
+  }
+  renderHTMLPreview(container) {
+    container.createEl("h2", { text: this.state.tableName });
+    if (this.state.isPrivate || this.state.tableReroll) {
+      const info = container.createDiv({ cls: "directives-info" });
+      if (this.state.isPrivate) {
+        info.createSpan({ text: "\u{1F512} Private", cls: "badge" });
+      }
+      if (this.state.tableReroll) {
+        info.createSpan({ text: `\u21BB Rerolls: ${this.state.tableReroll}`, cls: "badge" });
+      }
+    }
+    const table = container.createEl("table", { cls: "preview-table" });
+    const thead = table.createEl("thead");
+    const headerRow = thead.createEl("tr");
+    this.state.columns.forEach((col) => {
+      headerRow.createEl("th", { text: col.name });
+    });
+    const tbody = table.createEl("tbody");
+    this.state.rows.forEach((row) => {
+      const tr = tbody.createEl("tr");
+      this.state.columns.forEach((col) => {
+        const key = col.type === "dice" ? "range" : col.name;
+        tr.createEl("td", { text: row[key] || "" });
+      });
+    });
+  }
+  // History management
+  captureState() {
+    if (this.historyIndex < this.history.length - 1) {
+      this.history = this.history.slice(0, this.historyIndex + 1);
+    }
+    const stateCopy = JSON.parse(JSON.stringify(this.state));
+    this.history.push({
+      state: stateCopy,
+      timestamp: Date.now()
+    });
+    if (this.history.length > this.MAX_HISTORY) {
+      this.history.shift();
+    } else {
+      this.historyIndex++;
+    }
+  }
+  undo() {
+    if (this.historyIndex > 0) {
+      this.historyIndex--;
+      this.state = JSON.parse(JSON.stringify(this.history[this.historyIndex].state));
+      this.refreshUI();
+      this.markUnsaved();
+    }
+  }
+  redo() {
+    if (this.historyIndex < this.history.length - 1) {
+      this.historyIndex++;
+      this.state = JSON.parse(JSON.stringify(this.history[this.historyIndex].state));
+      this.refreshUI();
+      this.markUnsaved();
+    }
+  }
+  refreshUI() {
+    this.tableNameInput.value = this.state.tableName;
+    this.buildRowGrid();
+    this.updatePreview();
+  }
+  // Column operations
+  addDiceColumn() {
+    const modal = new import_obsidian2.Modal(this.app);
+    modal.titleEl.setText("Add Dice Column");
+    modal.contentEl.createEl("label", { text: "Select dice type:" });
+    const select = modal.contentEl.createEl("select");
+    select.style.width = "100%";
+    select.style.padding = "8px";
+    select.style.marginTop = "8px";
+    select.style.marginBottom = "12px";
+    const diceOptions = ["d4", "d6", "d8", "d10", "d12", "d20", "d100"];
+    diceOptions.forEach((dice) => {
+      select.createEl("option", { text: dice, value: dice });
+    });
+    const btnContainer = modal.contentEl.createDiv();
+    btnContainer.style.display = "flex";
+    btnContainer.style.justifyContent = "flex-end";
+    btnContainer.style.gap = "8px";
+    const cancelBtn = btnContainer.createEl("button", { text: "Cancel" });
+    cancelBtn.addEventListener("click", () => modal.close());
+    const addBtn = btnContainer.createEl("button", { text: "Add" });
+    addBtn.addEventListener("click", () => {
+      this.captureState();
+      const diceType = select.value;
+      this.state.columns.push({
+        name: diceType,
+        type: "dice",
+        diceNotation: diceType
+      });
+      this.markUnsaved();
+      this.leftPanel.empty();
+      this.buildLeftPanel();
+      this.schedulePreviewUpdate();
+      modal.close();
+    });
+    modal.open();
+  }
+  addColumn(type) {
+    this.captureState();
+    const name = type === "reroll" ? "reroll" : `Column ${this.state.columns.length}`;
+    this.state.columns.push({ name, type });
+    this.markUnsaved();
+    this.leftPanel.empty();
+    this.buildLeftPanel();
+    this.schedulePreviewUpdate();
+  }
+  deleteColumn(index) {
+    if (this.state.columns.length <= 1) {
+      new import_obsidian2.Notice("Cannot delete the last column");
+      return;
+    }
+    this.captureState();
+    const col = this.state.columns[index];
+    this.state.columns.splice(index, 1);
+    const key = col.type === "dice" ? "range" : col.name;
+    this.state.rows.forEach((row) => {
+      delete row[key];
+    });
+    this.markUnsaved();
+    this.leftPanel.empty();
+    this.buildLeftPanel();
+    this.schedulePreviewUpdate();
+  }
+  // Row operations
+  addRow() {
+    this.captureState();
+    this.state.rows.push({});
+    this.markUnsaved();
+    this.buildRowGrid();
+    this.schedulePreviewUpdate();
+  }
+  duplicateRow() {
+    if (this.state.rows.length === 0)
+      return;
+    this.captureState();
+    const row = this.state.rows[this.selectedRowIndex];
+    const copy = JSON.parse(JSON.stringify(row));
+    this.state.rows.splice(this.selectedRowIndex + 1, 0, copy);
+    this.selectedRowIndex++;
+    this.markUnsaved();
+    this.buildRowGrid();
+    this.schedulePreviewUpdate();
+  }
+  deleteRow() {
+    if (this.state.rows.length === 0)
+      return;
+    this.captureState();
+    this.state.rows.splice(this.selectedRowIndex, 1);
+    if (this.selectedRowIndex >= this.state.rows.length && this.selectedRowIndex > 0) {
+      this.selectedRowIndex--;
+    }
+    this.markUnsaved();
+    this.buildRowGrid();
+    this.schedulePreviewUpdate();
+  }
+  clearResults() {
+    this.captureState();
+    this.state.rows.forEach((row) => {
+      this.state.columns.forEach((col) => {
+        if (col.type === "regular") {
+          row[col.name] = "";
+        }
+      });
+    });
+    this.markUnsaved();
+    this.buildRowGrid();
+    this.schedulePreviewUpdate();
+  }
+  deleteAllRows() {
+    const modal = new import_obsidian2.Modal(this.app);
+    modal.titleEl.setText("Delete All Rows?");
+    modal.contentEl.setText("This will delete all rows. Do you want to proceed?.");
+    const btnContainer = modal.contentEl.createDiv({ cls: "modal-button-container" });
+    const cancelBtn = btnContainer.createEl("button", { text: "Cancel" });
+    cancelBtn.addEventListener("click", () => modal.close());
+    const confirmBtn = btnContainer.createEl("button", { text: "Delete All", cls: "mod-warning" });
+    confirmBtn.addEventListener("click", () => {
+      this.captureState();
+      this.state.rows = [];
+      this.selectedRowIndex = 0;
+      this.markUnsaved();
+      this.buildRowGrid();
+      this.schedulePreviewUpdate();
+      modal.close();
+    });
+    modal.open();
+  }
+  // Keyboard navigation
+  handleCellKeydown(e, rowIndex, colIndex) {
+    const rows = this.state.rows.length;
+    const cols = this.state.columns.length;
+    let newRow = rowIndex;
+    let newCol = colIndex;
+    let shouldMove = false;
+    if (e.key === "Tab") {
+      e.preventDefault();
+      if (e.shiftKey) {
+        newCol--;
+        if (newCol < 0) {
+          newCol = cols - 1;
+          newRow--;
+        }
+      } else {
+        newCol++;
+        if (newCol >= cols) {
+          newCol = 0;
+          newRow++;
+        }
+      }
+      shouldMove = true;
+    } else if (e.key === "Enter") {
+      e.preventDefault();
+      if (e.shiftKey) {
+        newRow--;
+      } else {
+        newRow++;
+      }
+      shouldMove = true;
+    }
+    if (shouldMove && newRow >= 0 && newRow < rows && newCol >= 0 && newCol < cols) {
+      this.selectedRowIndex = newRow;
+      setTimeout(() => {
+        const rowEls = this.rowGrid.querySelectorAll(".row-grid-row");
+        const rowEl = rowEls[newRow];
+        const inputs = rowEl.querySelectorAll("input");
+        const input = inputs[newCol];
+        if (input) {
+          input.focus();
+          input.select();
+        }
+      }, 0);
+    }
+  }
+  updateRowSelection() {
+    const rowEls = this.rowGrid.querySelectorAll(".row-grid-row");
+    rowEls.forEach((el, idx) => {
+      if (idx === this.selectedRowIndex) {
+        el.addClass("selected");
+      } else {
+        el.removeClass("selected");
+      }
+    });
+  }
+  onColumnDragStart(e, index) {
+    this.draggedColumnIndex = index;
+    if (e.dataTransfer) {
+      e.dataTransfer.effectAllowed = "move";
+    }
+  }
+  onColumnDragOver(e) {
+    e.preventDefault();
+    if (e.dataTransfer) {
+      e.dataTransfer.dropEffect = "move";
+    }
+  }
+  onColumnDrop(e, targetIndex) {
+    e.preventDefault();
+    if (this.draggedColumnIndex === targetIndex)
+      return;
+    this.captureState();
+    const [moved] = this.state.columns.splice(this.draggedColumnIndex, 1);
+    this.state.columns.splice(targetIndex, 0, moved);
+    this.draggedColumnIndex = -1;
+    this.markUnsaved();
+    this.leftPanel.empty();
+    this.buildLeftPanel();
+    this.schedulePreviewUpdate();
+  }
+  // Examples
+  applyExample(diceNotation, rowCount) {
+    this.captureState();
+    this.state.columns[0] = {
+      name: diceNotation,
+      type: "dice",
+      diceNotation
+    };
+    this.state.rows = this.generateDefaultRows(diceNotation, rowCount);
+    this.markUnsaved();
+    this.leftPanel.empty();
+    this.buildLeftPanel();
+    this.schedulePreviewUpdate();
+    new import_obsidian2.Notice(`Applied ${diceNotation} with ${rowCount} rows`);
+  }
+  // Template operations
+  async saveAsTemplate() {
+    const modal = new import_obsidian2.Modal(this.app);
+    modal.titleEl.setText("Save as Template");
+    const input = modal.contentEl.createEl("input", {
+      type: "text",
+      placeholder: "Template name",
+      value: this.state.tableName + " Template"
+    });
+    input.style.width = "100%";
+    input.style.padding = "8px";
+    input.style.marginBottom = "12px";
+    const btnContainer = modal.contentEl.createDiv();
+    btnContainer.style.display = "flex";
+    btnContainer.style.justifyContent = "flex-end";
+    btnContainer.style.gap = "8px";
+    const cancelBtn = btnContainer.createEl("button", { text: "Cancel" });
+    cancelBtn.addEventListener("click", () => modal.close());
+    const saveBtn = btnContainer.createEl("button", { text: "Save" });
+    saveBtn.addEventListener("click", async () => {
+      const templateName = input.value.trim();
+      if (!templateName) {
+        new import_obsidian2.Notice("Template name cannot be empty");
+        return;
+      }
+      await this.saveTemplate(templateName);
+      modal.close();
+    });
+    input.addEventListener("keypress", (e) => {
+      if (e.key === "Enter") {
+        saveBtn.click();
+      }
+    });
+    modal.open();
+    input.focus();
+  }
+  async saveTemplate(templateName) {
+    try {
+      const templatesFolder = ".table-templates";
+      const folder = this.app.vault.getAbstractFileByPath(templatesFolder);
+      if (!folder) {
+        await this.app.vault.createFolder(templatesFolder);
+      }
+      const templateState = {
+        tableName: templateName,
+        columns: JSON.parse(JSON.stringify(this.state.columns)),
+        rows: this.state.rows.map(() => ({})),
+        // Empty rows with same count
+        isPrivate: this.state.isPrivate,
+        tableReroll: this.state.tableReroll
+      };
+      const lines = [];
+      lines.push("---");
+      lines.push("table-roller-template: true");
+      lines.push("---");
+      lines.push("");
+      lines.push(`# ${templateName}`);
+      lines.push("");
+      lines.push("```json");
+      lines.push(JSON.stringify(templateState, null, 2));
+      lines.push("```");
+      const filename = `${templatesFolder}/${templateName}.md`;
+      await this.app.vault.create(filename, lines.join("\n"));
+      new import_obsidian2.Notice(`Template saved: ${templateName}`);
+    } catch (error) {
+      console.error("Error saving template:", error);
+      new import_obsidian2.Notice("Failed to save template");
+    }
+  }
+  // Import/Export
+  async importFromClipboard() {
+    try {
+      const text = await navigator.clipboard.readText();
+      const lines = text.split("\n").filter((l) => l.trim().includes("|"));
+      if (lines.length < 2) {
+        new import_obsidian2.Notice("No valid table found in clipboard");
+        return;
+      }
+      const headerLine = lines[0];
+      const headers = headerLine.split("|").map((h) => h.trim()).filter((h) => h.length > 0);
+      if (headers.length === 0) {
+        new import_obsidian2.Notice("Could not parse table headers");
+        return;
+      }
+      const columns = headers.map((h) => {
+        if (/^\d*d\d+$/i.test(h.trim())) {
+          return { name: h, type: "dice", diceNotation: h.toLowerCase() };
+        } else if (/^reroll$/i.test(h.trim())) {
+          return { name: h, type: "reroll" };
+        } else {
+          return { name: h, type: "regular" };
+        }
+      });
+      const rows = [];
+      for (let i = 2; i < lines.length; i++) {
+        const cells = lines[i].split("|").map((c) => c.trim()).filter((_, idx) => idx > 0 && idx <= headers.length);
+        if (cells.length > 0) {
+          const row = {};
+          headers.forEach((header, idx) => {
+            const col = columns[idx];
+            const key = col.type === "dice" ? "range" : col.name;
+            row[key] = cells[idx] || "";
+          });
+          rows.push(row);
+        }
+      }
+      this.captureState();
+      this.state.columns = columns;
+      this.state.rows = rows;
+      this.markUnsaved();
+      this.leftPanel.empty();
+      this.buildLeftPanel();
+      this.schedulePreviewUpdate();
+      new import_obsidian2.Notice("Table imported from clipboard");
+    } catch (error) {
+      console.error("Import error:", error);
+      new import_obsidian2.Notice("Failed to import from clipboard");
+    }
+  }
+  async copyToClipboard() {
+    const markdown = this.generateMarkdown();
+    await navigator.clipboard.writeText(markdown);
+    new import_obsidian2.Notice("Copied to clipboard");
+  }
+  async save() {
+    if (!await this.validate()) {
+      return;
+    }
+    if (this.currentFile) {
+      await this.saveToCurrentFile();
+      return;
+    }
+    await this.saveAs();
+  }
+  async saveAs() {
+    if (!await this.validate()) {
+      return;
+    }
+    const modal = new import_obsidian2.Modal(this.app);
+    modal.titleEl.setText("Save Table As");
+    const createNewBtn = modal.contentEl.createEl("button", {
+      text: "Create New File",
+      cls: "table-builder-btn"
+    });
+    createNewBtn.style.width = "100%";
+    createNewBtn.style.marginBottom = "8px";
+    createNewBtn.addEventListener("click", () => {
+      modal.close();
+      this.saveToNewFile();
+    });
+    const appendBtn = modal.contentEl.createEl("button", {
+      text: "Append to Existing File",
+      cls: "table-builder-btn"
+    });
+    appendBtn.style.width = "100%";
+    appendBtn.addEventListener("click", () => {
+      modal.close();
+      this.appendToFile();
+    });
+    modal.open();
+  }
+  async saveToNewFile() {
+    const modal = new import_obsidian2.Modal(this.app);
+    modal.titleEl.setText("Save to New File");
+    const input = modal.contentEl.createEl("input", {
+      type: "text",
+      placeholder: "Filename (without .md)",
+      value: this.state.tableName
+    });
+    input.style.width = "100%";
+    input.style.padding = "8px";
+    input.style.marginBottom = "12px";
+    const btnContainer = modal.contentEl.createDiv();
+    btnContainer.style.display = "flex";
+    btnContainer.style.justifyContent = "flex-end";
+    btnContainer.style.gap = "8px";
+    const cancelBtn = btnContainer.createEl("button", { text: "Cancel" });
+    cancelBtn.addEventListener("click", () => modal.close());
+    const saveBtn = btnContainer.createEl("button", { text: "Save" });
+    saveBtn.addEventListener("click", async () => {
+      const filename = input.value.trim();
+      if (!filename) {
+        new import_obsidian2.Notice("Filename cannot be empty");
+        return;
+      }
+      const fullFilename = filename.endsWith(".md") ? filename : `${filename}.md`;
+      const markdown = this.generateMarkdown();
+      try {
+        const file = await this.app.vault.create(fullFilename, markdown);
+        new import_obsidian2.Notice(`Saved to ${fullFilename}`);
+        this.currentFile = file;
+        this.hasUnsavedChanges = false;
+        await this.roller.loadTables();
+        modal.close();
+      } catch (error) {
+        console.error("Error saving file:", error);
+        new import_obsidian2.Notice("Failed to save file");
+      }
+    });
+    input.addEventListener("keypress", (e) => {
+      if (e.key === "Enter") {
+        saveBtn.click();
+      }
+    });
+    modal.open();
+    input.focus();
+  }
+  async appendToFile() {
+    const files = this.app.vault.getMarkdownFiles().filter((f) => !f.path.startsWith(".table-templates/"));
+    if (files.length === 0) {
+      new import_obsidian2.Notice("No markdown files found");
+      return;
+    }
+    const modal = new import_obsidian2.Modal(this.app);
+    modal.titleEl.setText("Select File to Append To");
+    const fileList = modal.contentEl.createDiv({ cls: "file-list" });
+    fileList.style.maxHeight = "400px";
+    fileList.style.overflowY = "auto";
+    files.forEach((file) => {
+      const fileBtn = fileList.createEl("button", {
+        text: file.path,
+        cls: "file-option"
+      });
+      fileBtn.style.display = "block";
+      fileBtn.style.width = "100%";
+      fileBtn.style.textAlign = "left";
+      fileBtn.style.padding = "8px";
+      fileBtn.style.marginBottom = "4px";
+      fileBtn.style.border = "1px solid var(--background-modifier-border)";
+      fileBtn.style.background = "var(--background-secondary)";
+      fileBtn.style.cursor = "pointer";
+      fileBtn.addEventListener("click", async () => {
+        modal.close();
+        await this.appendToSpecificFile(file);
+      });
+      fileBtn.addEventListener("mouseenter", () => {
+        fileBtn.style.background = "var(--background-modifier-hover)";
+      });
+      fileBtn.addEventListener("mouseleave", () => {
+        fileBtn.style.background = "var(--background-secondary)";
+      });
+    });
+    modal.open();
+  }
+  async appendToSpecificFile(file) {
+    try {
+      const currentContent = await this.app.vault.read(file);
+      const markdown = this.generateMarkdown();
+      const lines = markdown.split("\n");
+      const tableStartIndex = lines.findIndex((l) => l.startsWith("#"));
+      const tableContent = lines.slice(tableStartIndex).join("\n");
+      const newContent = currentContent + "\n\n" + tableContent;
+      await this.app.vault.modify(file, newContent);
+      new import_obsidian2.Notice(`Appended to ${file.path}`);
+      this.currentFile = file;
+      this.hasUnsavedChanges = false;
+      await this.roller.loadTables();
+    } catch (error) {
+      console.error("Error appending to file:", error);
+      new import_obsidian2.Notice("Failed to append to file");
+    }
+  }
+  async loadTable() {
+    const files = this.app.vault.getMarkdownFiles().filter((f) => !f.path.startsWith(".table-templates/"));
+    if (files.length === 0) {
+      new import_obsidian2.Notice("No markdown files found");
+      return;
+    }
+    const modal = new import_obsidian2.Modal(this.app);
+    modal.titleEl.setText("Load Table from File");
+    const fileList = modal.contentEl.createDiv({ cls: "file-list" });
+    fileList.style.maxHeight = "400px";
+    fileList.style.overflowY = "auto";
+    files.forEach((file) => {
+      const fileBtn = fileList.createEl("button", {
+        text: file.path,
+        cls: "file-option"
+      });
+      fileBtn.style.display = "block";
+      fileBtn.style.width = "100%";
+      fileBtn.style.textAlign = "left";
+      fileBtn.style.padding = "8px";
+      fileBtn.style.marginBottom = "4px";
+      fileBtn.style.border = "1px solid var(--background-modifier-border)";
+      fileBtn.style.background = "var(--background-secondary)";
+      fileBtn.style.cursor = "pointer";
+      fileBtn.addEventListener("click", async () => {
+        modal.close();
+        await this.loadFromFile(file);
+      });
+      fileBtn.addEventListener("mouseenter", () => {
+        fileBtn.style.background = "var(--background-modifier-hover)";
+      });
+      fileBtn.addEventListener("mouseleave", () => {
+        fileBtn.style.background = "var(--background-secondary)";
+      });
+    });
+    modal.open();
+  }
+  async loadFromFile(file) {
+    try {
+      this.currentFile = file;
+      const content = await this.app.vault.read(file);
+      const parsed = TableParser.parseTables(content, file.basename);
+      const tableNames = Object.keys(parsed.tables);
+      if (tableNames.length === 0) {
+        new import_obsidian2.Notice("No tables found in file");
+        return;
+      }
+      if (tableNames.length === 1) {
+        await this.loadParsedTable(tableNames[0], parsed.tables[tableNames[0]], parsed);
+      } else {
+        this.showTablePicker(tableNames, parsed);
+      }
+    } catch (error) {
+      console.error("Error loading table:", error);
+      new import_obsidian2.Notice("Failed to load table");
+    }
+  }
+  showTablePicker(tableNames, parsed) {
+    const modal = new import_obsidian2.Modal(this.app);
+    modal.titleEl.setText("Select Table");
+    const tableList = modal.contentEl.createDiv({ cls: "table-list" });
+    tableNames.forEach((name) => {
+      const btn = tableList.createEl("button", {
+        text: name,
+        cls: "table-option"
+      });
+      btn.style.display = "block";
+      btn.style.width = "100%";
+      btn.style.textAlign = "left";
+      btn.style.padding = "8px";
+      btn.style.marginBottom = "4px";
+      btn.style.border = "1px solid var(--background-modifier-border)";
+      btn.style.background = "var(--background-secondary)";
+      btn.style.cursor = "pointer";
+      btn.addEventListener("click", async () => {
+        modal.close();
+        await this.loadParsedTable(name, parsed.tables[name], parsed);
+      });
+      btn.addEventListener("mouseenter", () => {
+        btn.style.background = "var(--background-modifier-hover)";
+      });
+      btn.addEventListener("mouseleave", () => {
+        btn.style.background = "var(--background-secondary)";
+      });
+    });
+    modal.open();
+  }
+  async loadParsedTable(tableName, table, parsed) {
+    const columns = [];
+    const rows = [];
+    if ("dice" in table) {
+      columns.push({
+        name: table.dice,
+        type: "dice",
+        diceNotation: table.dice
+      });
+      if (table.entries.length > 0) {
+        const firstEntry = table.entries[0];
+        if (firstEntry.columns) {
+          for (const colName of Object.keys(firstEntry.columns)) {
+            if (colName.toLowerCase() === "reroll") {
+              columns.push({ name: colName, type: "reroll" });
+            } else {
+              columns.push({ name: colName, type: "regular" });
+            }
+          }
+        }
+      }
+      for (const entry of table.entries) {
+        const row = {
+          range: entry.min === entry.max ? `${entry.min}` : `${entry.min}-${entry.max}`
+        };
+        if (entry.columns) {
+          for (const [key, value] of Object.entries(entry.columns)) {
+            row[key] = value;
+          }
+        }
+        if (entry.reroll) {
+          row.reroll = entry.reroll;
+        }
+        rows.push(row);
+      }
+    } else {
+      for (const header of table.headers) {
+        if (header.toLowerCase() === "reroll") {
+          columns.push({ name: header, type: "reroll" });
+        } else {
+          columns.push({ name: header, type: "regular" });
+        }
+      }
+      for (const row of table.rows) {
+        rows.push({ ...row });
+      }
+    }
+    this.state = {
+      tableName,
+      columns,
+      rows,
+      isPrivate: table.private || false,
+      tableReroll: table.reroll
+    };
+    this.history = [];
+    this.historyIndex = -1;
+    this.hasUnsavedChanges = false;
+    this.leftPanel.empty();
+    this.buildLeftPanel();
+    this.updatePreview();
+    new import_obsidian2.Notice(`Loaded table: ${tableName}`);
+  }
+  async saveToCurrentFile() {
+    if (!this.currentFile)
+      return;
+    try {
+      const currentContent = await this.app.vault.read(this.currentFile);
+      const markdown = this.generateMarkdown();
+      const tableName = this.state.tableName;
+      const tableHeading = `# ${tableName}`;
+      const lines = currentContent.split("\n");
+      let tableStartIndex = -1;
+      let tableEndIndex = -1;
+      for (let i = 0; i < lines.length; i++) {
+        if (lines[i].trim() === tableHeading) {
+          tableStartIndex = i;
+          break;
+        }
+      }
+      if (tableStartIndex !== -1) {
+        for (let i = tableStartIndex + 1; i < lines.length; i++) {
+          if (lines[i].startsWith("# ")) {
+            tableEndIndex = i - 1;
+            break;
+          }
+        }
+        if (tableEndIndex === -1) {
+          tableEndIndex = lines.length - 1;
+        }
+        const markdownLines = markdown.split("\n");
+        const tableContentStart = markdownLines.findIndex((l) => l.startsWith("#"));
+        const newTableContent = markdownLines.slice(tableContentStart).join("\n");
+        const before = lines.slice(0, tableStartIndex);
+        const after = lines.slice(tableEndIndex + 1);
+        while (before.length > 0 && before[before.length - 1].trim() === "") {
+          before.pop();
+        }
+        while (after.length > 0 && after[0].trim() === "") {
+          after.shift();
+        }
+        const newContent = [...before, "", newTableContent, "", ...after].join("\n");
+        await this.app.vault.modify(this.currentFile, newContent);
+        new import_obsidian2.Notice(`Saved to ${this.currentFile.path}`);
+      } else {
+        const markdownLines = markdown.split("\n");
+        const tableContentStart = markdownLines.findIndex((l) => l.startsWith("#"));
+        const newTableContent = markdownLines.slice(tableContentStart).join("\n");
+        const newContent = currentContent + "\n\n" + newTableContent;
+        await this.app.vault.modify(this.currentFile, newContent);
+        new import_obsidian2.Notice(`Table added to ${this.currentFile.path}`);
+      }
+      this.hasUnsavedChanges = false;
+      await this.roller.loadTables();
+    } catch (error) {
+      console.error("Error saving to current file:", error);
+      new import_obsidian2.Notice("Failed to save to file");
+    }
+  }
+  async exportAs(format) {
+    let content = "";
+    let extension = "";
+    if (format === "md") {
+      content = this.generateMarkdown();
+      extension = "md";
+    } else if (format === "csv") {
+      content = this.generateCSV();
+      extension = "csv";
+    } else if (format === "json") {
+      content = this.generateJSON();
+      extension = "json";
+    }
+    await navigator.clipboard.writeText(content);
+    new import_obsidian2.Notice(`${format.toUpperCase()} copied to clipboard`);
+  }
+  generateCSV() {
+    const headers = this.state.columns.map((col) => col.name);
+    const lines = [headers.join(",")];
+    this.state.rows.forEach((row) => {
+      const cells = this.state.columns.map((col) => {
+        const key = col.type === "dice" ? "range" : col.name;
+        const value = row[key] || "";
+        return value.includes(",") || value.includes('"') ? `"${value.replace(/"/g, '""')}"` : value;
+      });
+      lines.push(cells.join(","));
+    });
+    return lines.join("\n");
+  }
+  generateJSON() {
+    return JSON.stringify({
+      tableName: this.state.tableName,
+      isPrivate: this.state.isPrivate,
+      tableReroll: this.state.tableReroll,
+      columns: this.state.columns,
+      rows: this.state.rows
+    }, null, 2);
+  }
+  // Validation
+  async validate() {
+    const errors = [];
+    if (!this.state.tableName.trim()) {
+      errors.push("Table name cannot be empty");
+    }
+    if (this.state.tableReroll) {
+      const valid = await this.validateRerollReference(this.state.tableReroll, true);
+      if (!valid) {
+        errors.push(`Invalid table-level reroll reference: ${this.state.tableReroll}`);
+      }
+    }
+    const rerollCol = this.state.columns.find((c) => c.type === "reroll");
+    if (rerollCol) {
+      for (const row of this.state.rows) {
+        const rerollValue = row[rerollCol.name];
+        if (rerollValue && rerollValue !== "\u2014" && rerollValue !== "-") {
+          const valid = await this.validateRerollReference(rerollValue, true);
+          if (!valid) {
+            errors.push(`Invalid reroll reference: ${rerollValue}`);
+          }
+        }
+      }
+    }
+    const diceCol = this.state.columns.find((c) => c.type === "dice");
+    if (diceCol) {
+      for (const row of this.state.rows) {
+        const range = row.range;
+        if (range) {
+          const parsed = TableParser["parseRange"](range);
+          if (parsed.min === 0 && parsed.max === 0) {
+            errors.push(`Invalid range format: ${range}`);
+          }
+        }
+      }
+    }
+    if (errors.length > 0) {
+      const modal = new import_obsidian2.Modal(this.app);
+      modal.titleEl.setText("Validation Errors");
+      modal.contentEl.createEl("p", { text: "Please fix the following errors:" });
+      const list = modal.contentEl.createEl("ul");
+      errors.forEach((error) => {
+        list.createEl("li", { text: error });
+      });
+      const closeBtn = modal.contentEl.createEl("button", { text: "OK" });
+      closeBtn.addEventListener("click", () => modal.close());
+      modal.open();
+      return false;
+    }
+    return true;
+  }
+  async validateRerollReference(reference, silent = false) {
+    const tableNames = reference.split(",").map((t) => t.trim()).filter((t) => t);
+    for (const name of tableNames) {
+      const multiRollMatch = name.match(/^(\d*d\d+)\s+(.+)$/i);
+      const actualTableName = multiRollMatch ? multiRollMatch[2].trim() : name;
+      try {
+        const tableFile = this.roller.getTableFile(actualTableName);
+        if (!tableFile) {
+          if (!silent) {
+            new import_obsidian2.Notice(`Table not found: ${actualTableName}`);
+          }
+          return false;
+        }
+      } catch (error) {
+        if (!silent) {
+          const errorMsg = error instanceof Error ? error.message : String(error);
+          new import_obsidian2.Notice(errorMsg);
+        }
+        return false;
+      }
+    }
+    return true;
+  }
+  // Utility
+  markUnsaved() {
+    this.hasUnsavedChanges = true;
+  }
+  applyStyles() {
+    const styleEl = document.createElement("style");
+    styleEl.textContent = `
+			.table-builder-view {
+				height: 100%;
+				overflow: hidden;
+			}
+			
+			.table-builder-split {
+				display: flex;
+				height: 100%;
+				gap: 16px;
+				padding: 16px;
+			}
+			
+			.table-builder-left-panel {
+				flex: 1;
+				overflow-y: auto;
+				padding-right: 8px;
+			}
+			
+			.table-builder-right-panel {
+				flex: 1;
+				display: flex;
+				flex-direction: column;
+				overflow: hidden;
+			}
+			
+			.table-builder-toolbar {
+				display: flex;
+				gap: 8px;
+				margin-bottom: 16px;
+				flex-wrap: wrap;
+			}
+			
+			.table-builder-btn {
+				padding: 6px 12px;
+				border-radius: 4px;
+				border: 1px solid var(--background-modifier-border);
+				background: var(--interactive-normal);
+				cursor: pointer;
+				font-size: 13px;
+			}
+			
+			.table-builder-btn:hover {
+				background: var(--interactive-hover);
+			}
+			
+			.table-builder-section {
+				margin-bottom: 24px;
+			}
+			
+			.table-builder-section h3 {
+				margin: 0 0 12px 0;
+				font-size: 14px;
+				font-weight: 600;
+			}
+			
+			.table-builder-section label {
+				display: block;
+				margin-bottom: 6px;
+				font-size: 13px;
+			}
+			
+			.table-builder-section input[type="text"] {
+				width: 100%;
+				padding: 6px 8px;
+				border: 1px solid var(--background-modifier-border);
+				border-radius: 4px;
+				background: var(--background-primary);
+			}
+			
+			.columns-list {
+				display: flex;
+				flex-direction: column;
+				gap: 8px;
+				margin-bottom: 12px;
+			}
+			
+			.column-item {
+				display: flex;
+				align-items: center;
+				gap: 8px;
+				padding: 8px;
+				border: 1px solid var(--background-modifier-border);
+				border-radius: 4px;
+				background: var(--background-secondary);
+			}
+			
+			.drag-handle {
+				cursor: move;
+				color: var(--text-muted);
+				user-select: none;
+			}
+			
+			.column-item input {
+				flex: 1;
+				padding: 4px 8px;
+				border: 1px solid var(--background-modifier-border);
+				border-radius: 3px;
+			}
+			
+			.column-type {
+				font-size: 11px;
+				color: var(--text-muted);
+			}
+			
+			.delete-btn {
+				padding: 2px 8px;
+				border: none;
+				background: var(--background-modifier-error);
+				color: var(--text-on-accent);
+				border-radius: 3px;
+				cursor: pointer;
+				font-size: 16px;
+				line-height: 1;
+			}
+			
+			.add-column-btns {
+				display: flex;
+				gap: 8px;
+			}
+			
+			.directive-item {
+				margin-bottom: 12px;
+			}
+			
+			.directive-item label {
+				display: flex;
+				align-items: center;
+				gap: 8px;
+			}
+			
+			.directive-item input[type="checkbox"] {
+				margin: 0;
+			}
+			
+			.row-grid-header, .row-grid-row {
+				display: grid;
+				grid-template-columns: 40px repeat(auto-fit, minmax(100px, 1fr));
+				gap: 4px;
+				margin-bottom: 4px;
+			}
+			
+			.row-grid-header {
+				font-weight: 600;
+				border-bottom: 2px solid var(--background-modifier-border);
+				padding-bottom: 4px;
+			}
+			
+			.row-number {
+				text-align: center;
+				padding: 6px;
+				color: var(--text-muted);
+				cursor: pointer;
+			}
+			
+			.row-grid-row.selected {
+				background: var(--background-modifier-hover);
+			}
+			
+			.grid-cell {
+				padding: 2px;
+			}
+			
+			.grid-cell input {
+				width: 100%;
+				padding: 4px 6px;
+				border: 1px solid var(--background-modifier-border);
+				border-radius: 3px;
+				background: var(--background-primary);
+			}
+			
+			.examples-sidebar {
+				margin-top: 24px;
+				padding-top: 16px;
+				border-top: 1px solid var(--background-modifier-border);
+			}
+			
+			.examples-sidebar details {
+				cursor: pointer;
+			}
+			
+			.examples-content {
+				padding: 12px 0;
+			}
+			
+			.examples-content h4 {
+				margin: 8px 0;
+				font-size: 13px;
+			}
+			
+			.example-btn {
+				display: block;
+				width: 100%;
+				text-align: left;
+				padding: 6px 12px;
+				margin-bottom: 4px;
+				border: 1px solid var(--background-modifier-border);
+				border-radius: 4px;
+				background: var(--background-secondary);
+				cursor: pointer;
+				font-size: 12px;
+			}
+			
+			.example-btn:hover {
+				background: var(--background-modifier-hover);
+			}
+			
+			.placeholder-text {
+				font-size: 12px;
+				color: var(--text-muted);
+				font-style: italic;
+			}
+			
+			.preview-tabs {
+				display: flex;
+				gap: 4px;
+				margin-bottom: 12px;
+				border-bottom: 1px solid var(--background-modifier-border);
+			}
+			
+			.tab-btn {
+				padding: 8px 16px;
+				border: none;
+				background: transparent;
+				cursor: pointer;
+				border-bottom: 2px solid transparent;
+			}
+			
+			.tab-btn.active {
+				border-bottom-color: var(--interactive-accent);
+			}
+			
+			.preview-container {
+				flex: 1;
+				overflow-y: auto;
+				position: relative;
+			}
+			
+			.markdown-preview, .html-preview {
+				display: none;
+				padding: 12px;
+			}
+			
+			.markdown-preview.active, .html-preview.active {
+				display: block;
+			}
+			
+			.markdown-preview pre {
+				background: var(--background-secondary);
+				padding: 12px;
+				border-radius: 4px;
+				overflow-x: auto;
+			}
+			
+			.markdown-preview code {
+				font-family: var(--font-monospace);
+				font-size: 12px;
+				white-space: pre;
+			}
+			
+			.preview-table {
+				width: 100%;
+				border-collapse: collapse;
+			}
+			
+			.preview-table th, .preview-table td {
+				border: 1px solid var(--background-modifier-border);
+				padding: 8px;
+				text-align: left;
+			}
+			
+			.preview-table th {
+				background: var(--background-secondary);
+				font-weight: 600;
+			}
+			
+			.directives-info {
+				margin-bottom: 12px;
+				display: flex;
+				gap: 8px;
+			}
+			
+			.badge {
+				padding: 4px 8px;
+				border-radius: 4px;
+				background: var(--background-secondary);
+				font-size: 11px;
+			}
+			
+			.export-buttons {
+				display: flex;
+				gap: 8px;
+				flex-wrap: wrap;
+				padding: 12px;
+				border-top: 1px solid var(--background-modifier-border);
+			}
+			
+			.export-format {
+				padding: 6px 12px;
+				border: 1px solid var(--background-modifier-border);
+				border-radius: 4px;
+				background: var(--background-primary);
+			}
+		`;
+    document.head.appendChild(styleEl);
+  }
+};
+
 // main.ts
-var TableRollerPlugin = class extends import_obsidian2.Plugin {
+var TableRollerPlugin = class extends import_obsidian3.Plugin {
   async onload() {
     console.log("Loading Table Roller plugin");
     this.roller = new TableRollerCore(this.app);
+    this.registerView(
+      VIEW_TYPE_TABLE_BUILDER,
+      (leaf) => new TableBuilderView(leaf, this.roller)
+    );
     try {
       await this.roller.loadTables();
     } catch (error) {
       console.error("Error loading tables:", error);
     }
+    this.addCommand({
+      id: "open-table-builder",
+      name: "Create/Edit Table",
+      callback: async () => {
+        const leaf = this.app.workspace.getLeaf("tab");
+        await leaf.setViewState({
+          type: VIEW_TYPE_TABLE_BUILDER,
+          active: true
+        });
+      }
+    });
+    this.addRibbonIcon("table", "Create/Edit Table", async () => {
+      const leaf = this.app.workspace.getLeaf("tab");
+      await leaf.setViewState({
+        type: VIEW_TYPE_TABLE_BUILDER,
+        active: true
+      });
+    });
     this.addCommand({
       id: "roll-on-table",
       name: "Roll on table",
