@@ -5,14 +5,15 @@ import { TableParser } from '../services/TableParser';
 export const VIEW_TYPE_TABLE_BUILDER = 'table-builder';
 
 interface ColumnConfig {
+	id: string; // Stable identifier that never changes
 	name: string;
 	type: 'dice' | 'regular' | 'reroll';
 	diceNotation?: string; // e.g., 'd6', '2d6', 'd100'
 }
 
 interface RowData {
-	range?: string; // For dice columns
-	[columnName: string]: string | undefined;
+	range?: string; // For dice columns (dice column always uses 'range')
+	[columnId: string]: string | undefined; // Data keyed by stable column ID
 }
 
 interface TableState {
@@ -117,12 +118,16 @@ export class TableBuilderView extends ItemView {
 		return {
 			tableName: 'New Table',
 			columns: [
-				{ name: 'd6', type: 'dice', diceNotation: 'd6' },
-				{ name: 'Result', type: 'regular' }
+				{ id: 'col_dice', name: 'd6', type: 'dice', diceNotation: 'd6' },
+				{ id: 'col_0', name: 'Result', type: 'regular' }
 			],
 			rows: this.generateDefaultRows('d6', 6),
 			isPrivate: false
 		};
+	}
+	
+	private generateColumnId(): string {
+		return `col_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 	}
 
 	private generateDefaultRows(diceNotation: string, count: number, groupSize?: number, remainder?: 'expand-first' | 'expand-last' | 'row-first' | 'row-last'): RowData[] {
@@ -311,35 +316,37 @@ export class TableBuilderView extends ItemView {
 				nameInput.style.cursor = 'not-allowed';
 			}
 			
-			nameInput.addEventListener('input', () => {
-				this.captureState();
-				col.name = nameInput.value;
-				// Update diceNotation if this is a dice column
-				if (col.type === 'dice') {
-					col.diceNotation = nameInput.value;
-					this.buildRowGrid();
-				}
-				this.markUnsaved();
-				this.schedulePreviewUpdate();
-			});
-			
-			// Column type indicator
-			const typeLabel = colItem.createSpan({ text: `(${col.type})`, cls: 'column-type' });
-			
-			// Generate button for dice columns
-			if (col.type === 'dice' && col.diceNotation) {
-				const generateBtn = colItem.createEl('button', { text: 'Generate Rows...', cls: 'table-builder-btn-small' });
-				generateBtn.style.marginLeft = '8px';
-				generateBtn.addEventListener('click', () => this.showGenerateRowsModal(col.diceNotation!));
-			}
-			
-			// Delete button
-			if (this.state.columns.length > 1) {
-				const deleteBtn = colItem.createEl('button', { text: '×', cls: 'delete-btn' });
-				deleteBtn.addEventListener('click', () => this.deleteColumn(index));
+		nameInput.addEventListener('input', () => {
+			this.captureState();
+			col.name = nameInput.value;
+			this.markUnsaved();
+			this.schedulePreviewUpdate();
+		});
+		
+		// Rebuild row grid when editing is complete (for dice columns to update ranges)
+		nameInput.addEventListener('blur', () => {
+			if (col.type === 'dice') {
+				this.buildRowGrid();
 			}
 		});
 		
+		// Column type indicator
+		const typeLabel = colItem.createSpan({ text: `(${col.type})`, cls: 'column-type' });
+		
+		// Generate button for dice columns
+		if (col.type === 'dice' && col.diceNotation) {
+			const generateBtn = colItem.createEl('button', { text: 'Generate Rows...', cls: 'table-builder-btn-small' });
+			generateBtn.style.marginLeft = '8px';
+			generateBtn.addEventListener('click', () => this.showGenerateRowsModal(col.diceNotation!));
+		}
+		
+		// Delete button
+		if (this.state.columns.length > 1) {
+			const deleteBtn = colItem.createEl('button', { text: '×', cls: 'delete-btn' });
+			deleteBtn.addEventListener('click', () => this.deleteColumn(index));
+		}
+	});
+	
 		// Add column buttons
 		const addBtns = container.createDiv({ cls: 'add-column-btns' });
 		
@@ -438,7 +445,7 @@ export class TableBuilderView extends ItemView {
 			
 			// Cells
 			this.state.columns.forEach((col, colIndex) => {
-				const cellKey = col.type === 'dice' ? 'range' : col.name;
+				const cellKey = col.type === 'dice' ? 'range' : col.id; // Use stable ID
 				const cellValue = row[cellKey] || '';
 				
 				const cell = rowEl.createDiv({ cls: 'grid-cell' });
@@ -662,7 +669,7 @@ export class TableBuilderView extends ItemView {
 		// Table rows
 		this.state.rows.forEach(row => {
 			const cells = this.state.columns.map(col => {
-				const key = col.type === 'dice' ? 'range' : col.name;
+				const key = col.type === 'dice' ? 'range' : col.id; // Use stable ID
 				return row[key] || '';
 			});
 			lines.push('| ' + cells.join(' | ') + ' |');
@@ -701,7 +708,7 @@ export class TableBuilderView extends ItemView {
 		this.state.rows.forEach(row => {
 			const tr = tbody.createEl('tr');
 			this.state.columns.forEach(col => {
-				const key = col.type === 'dice' ? 'range' : col.name;
+				const key = col.type === 'dice' ? 'range' : col.id; // Use stable ID
 				tr.createEl('td', { text: row[key] || '' });
 			});
 		});
@@ -831,6 +838,7 @@ export class TableBuilderView extends ItemView {
 			this.captureState();
 			// Insert dice column at the beginning
 			this.state.columns.unshift({ 
+				id: this.generateColumnId(),
 				name: diceType, 
 				type: 'dice',
 				diceNotation: diceType
@@ -854,7 +862,8 @@ export class TableBuilderView extends ItemView {
 		
 		this.captureState();
 		const name = type === 'reroll' ? 'reroll' : `Column ${this.state.columns.length}`;
-		this.state.columns.push({ name, type });
+		const id = this.generateColumnId();
+		this.state.columns.push({ id, name, type });
 		this.markUnsaved();
 		this.leftPanel.empty();
 		this.buildLeftPanel();
@@ -871,8 +880,8 @@ export class TableBuilderView extends ItemView {
 		const col = this.state.columns[index];
 		this.state.columns.splice(index, 1);
 		
-		// Remove data from rows
-		const key = col.type === 'dice' ? 'range' : col.name;
+		// Remove data from rows using stable ID
+		const key = col.type === 'dice' ? 'range' : col.id;
 		this.state.rows.forEach(row => {
 			delete row[key];
 		});
@@ -928,7 +937,7 @@ export class TableBuilderView extends ItemView {
 		this.state.rows.forEach(row => {
 			this.state.columns.forEach(col => {
 				if (col.type === 'regular') {
-					row[col.name] = '';
+					row[col.id] = ''; // Use stable ID
 				}
 			});
 		});
@@ -1201,18 +1210,10 @@ export class TableBuilderView extends ItemView {
 			this.captureState();
 			
 			const col = this.state.columns[colIndex];
-			const cellKey = col.type === 'dice' ? 'range' : col.name;
-			
-			// If we need more rows, create them
-			const rowsNeeded = values.length;
-			while (this.state.rows.length < rowsNeeded) {
-				this.state.rows.push({});
-			}
-			
-			// Fill the column with values
-			for (let i = 0; i < values.length; i++) {
-				this.state.rows[i][cellKey] = values[i];
-			}
+		const cellKey = col.type === 'dice' ? 'range' : col.id; // Use stable ID
+		const rowsNeeded = values.length;
+		
+		// Add more rows if needed
 			
 			this.markUnsaved();
 			this.buildRowGrid();
@@ -1231,6 +1232,7 @@ export class TableBuilderView extends ItemView {
 		
 		// Update first column to be dice column
 		this.state.columns[0] = {
+			id: this.state.columns[0]?.id || this.generateColumnId(),
 			name: diceNotation,
 			type: 'dice',
 			diceNotation: diceNotation
@@ -1499,13 +1501,14 @@ export class TableBuilderView extends ItemView {
 			}
 			
 			// Detect columns
-			const columns: ColumnConfig[] = headers.map(h => {
+			const columns: ColumnConfig[] = headers.map((h, idx) => {
+				const id = this.generateColumnId();
 				if (/^\d*d\d+$/i.test(h.trim())) {
-					return { name: h, type: 'dice' as const, diceNotation: h.toLowerCase() };
+					return { id, name: h, type: 'dice' as const, diceNotation: h.toLowerCase() };
 				} else if (/^reroll$/i.test(h.trim())) {
-					return { name: h, type: 'reroll' as const };
+					return { id, name: h, type: 'reroll' as const };
 				} else {
-					return { name: h, type: 'regular' as const };
+					return { id, name: h, type: 'regular' as const };
 				}
 			});
 			
@@ -1520,7 +1523,7 @@ export class TableBuilderView extends ItemView {
 					const row: RowData = {};
 					headers.forEach((header, idx) => {
 						const col = columns[idx];
-						const key = col.type === 'dice' ? 'range' : col.name;
+						const key = col.type === 'dice' ? 'range' : col.id; // Use stable ID
 						row[key] = cells[idx] || '';
 					});
 					rows.push(row);
@@ -1839,9 +1842,14 @@ export class TableBuilderView extends ItemView {
 		const columns: ColumnConfig[] = [];
 		const rows: RowData[] = [];
 		
+		// Map to track old column name -> new column ID for data migration
+		const nameToIdMap = new Map<string, string>();
+		
 		if ('dice' in table) {
 			// Dice table
+			const diceColId = this.generateColumnId();
 			columns.push({
+				id: diceColId,
 				name: table.dice,
 				type: 'dice',
 				diceNotation: table.dice
@@ -1852,16 +1860,18 @@ export class TableBuilderView extends ItemView {
 				const firstEntry = table.entries[0];
 				if (firstEntry.columns) {
 					for (const colName of Object.keys(firstEntry.columns)) {
+						const colId = this.generateColumnId();
+						nameToIdMap.set(colName, colId);
 						if (colName.toLowerCase() === 'reroll') {
-							columns.push({ name: colName, type: 'reroll' });
+							columns.push({ id: colId, name: colName, type: 'reroll' });
 						} else {
-							columns.push({ name: colName, type: 'regular' });
+							columns.push({ id: colId, name: colName, type: 'regular' });
 						}
 					}
 				}
 			}
 			
-			// Convert entries to rows
+			// Convert entries to rows, migrating keys from names to IDs
 			for (const entry of table.entries) {
 				const row: RowData = {
 					range: entry.min === entry.max ? `${entry.min}` : `${entry.min}-${entry.max}`
@@ -1869,7 +1879,8 @@ export class TableBuilderView extends ItemView {
 				
 				if (entry.columns) {
 					for (const [key, value] of Object.entries(entry.columns)) {
-						row[key] = value as string;
+						const newKey = nameToIdMap.get(key) || key;
+						row[newKey] = value as string;
 					}
 				}
 				
@@ -1882,15 +1893,23 @@ export class TableBuilderView extends ItemView {
 		} else {
 			// Simple table
 			for (const header of table.headers) {
+				const colId = this.generateColumnId();
+				nameToIdMap.set(header, colId);
 				if (header.toLowerCase() === 'reroll') {
-					columns.push({ name: header, type: 'reroll' });
+					columns.push({ id: colId, name: header, type: 'reroll' });
 				} else {
-					columns.push({ name: header, type: 'regular' });
+					columns.push({ id: colId, name: header, type: 'regular' });
 				}
 			}
 			
+			// Migrate row keys from names to IDs
 			for (const row of table.rows) {
-				rows.push({ ...row });
+				const migratedRow: RowData = {};
+				for (const [key, value] of Object.entries(row)) {
+					const newKey = nameToIdMap.get(key) || key;
+					migratedRow[newKey] = value as string;
+				}
+				rows.push(migratedRow);
 			}
 		}
 		
@@ -2069,12 +2088,12 @@ export class TableBuilderView extends ItemView {
 				errors.push(`Invalid table-level reroll reference: ${this.state.tableReroll}`);
 			}
 		}
-		
+
 		// Validate row rerolls
 		const rerollCol = this.state.columns.find(c => c.type === 'reroll');
 		if (rerollCol) {
 			for (const row of this.state.rows) {
-				const rerollValue = row[rerollCol.name];
+				const rerollValue = row[rerollCol.id];
 				if (rerollValue && rerollValue !== '—' && rerollValue !== '-') {
 					const valid = await this.validateRerollReference(rerollValue, true);
 					if (!valid) {
@@ -2083,7 +2102,7 @@ export class TableBuilderView extends ItemView {
 				}
 			}
 		}
-		
+
 		// Validate dice ranges
 		const diceCol = this.state.columns.find(c => c.type === 'dice');
 		if (diceCol) {

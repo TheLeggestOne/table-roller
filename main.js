@@ -923,12 +923,15 @@ var TableBuilderView = class extends import_obsidian2.ItemView {
     return {
       tableName: "New Table",
       columns: [
-        { name: "d6", type: "dice", diceNotation: "d6" },
-        { name: "Result", type: "regular" }
+        { id: "col_dice", name: "d6", type: "dice", diceNotation: "d6" },
+        { id: "col_0", name: "Result", type: "regular" }
       ],
       rows: this.generateDefaultRows("d6", 6),
       isPrivate: false
     };
+  }
+  generateColumnId() {
+    return `col_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
   }
   generateDefaultRows(diceNotation, count, groupSize, remainder) {
     const rows = [];
@@ -1059,12 +1062,13 @@ var TableBuilderView = class extends import_obsidian2.ItemView {
       nameInput.addEventListener("input", () => {
         this.captureState();
         col.name = nameInput.value;
-        if (col.type === "dice") {
-          col.diceNotation = nameInput.value;
-          this.buildRowGrid();
-        }
         this.markUnsaved();
         this.schedulePreviewUpdate();
+      });
+      nameInput.addEventListener("blur", () => {
+        if (col.type === "dice") {
+          this.buildRowGrid();
+        }
       });
       const typeLabel = colItem.createSpan({ text: `(${col.type})`, cls: "column-type" });
       if (col.type === "dice" && col.diceNotation) {
@@ -1148,7 +1152,7 @@ var TableBuilderView = class extends import_obsidian2.ItemView {
         this.updateRowSelection();
       });
       this.state.columns.forEach((col, colIndex) => {
-        const cellKey = col.type === "dice" ? "range" : col.name;
+        const cellKey = col.type === "dice" ? "range" : col.id;
         const cellValue = row[cellKey] || "";
         const cell = rowEl.createDiv({ cls: "grid-cell" });
         const input = cell.createEl("input", {
@@ -1308,7 +1312,7 @@ var TableBuilderView = class extends import_obsidian2.ItemView {
     lines.push("|" + headers.map(() => "----").join("|") + "|");
     this.state.rows.forEach((row) => {
       const cells = this.state.columns.map((col) => {
-        const key = col.type === "dice" ? "range" : col.name;
+        const key = col.type === "dice" ? "range" : col.id;
         return row[key] || "";
       });
       lines.push("| " + cells.join(" | ") + " |");
@@ -1336,7 +1340,7 @@ var TableBuilderView = class extends import_obsidian2.ItemView {
     this.state.rows.forEach((row) => {
       const tr = tbody.createEl("tr");
       this.state.columns.forEach((col) => {
-        const key = col.type === "dice" ? "range" : col.name;
+        const key = col.type === "dice" ? "range" : col.id;
         tr.createEl("td", { text: row[key] || "" });
       });
     });
@@ -1437,6 +1441,7 @@ var TableBuilderView = class extends import_obsidian2.ItemView {
       }
       this.captureState();
       this.state.columns.unshift({
+        id: this.generateColumnId(),
         name: diceType,
         type: "dice",
         diceNotation: diceType
@@ -1456,7 +1461,8 @@ var TableBuilderView = class extends import_obsidian2.ItemView {
     }
     this.captureState();
     const name = type === "reroll" ? "reroll" : `Column ${this.state.columns.length}`;
-    this.state.columns.push({ name, type });
+    const id = this.generateColumnId();
+    this.state.columns.push({ id, name, type });
     this.markUnsaved();
     this.leftPanel.empty();
     this.buildLeftPanel();
@@ -1470,7 +1476,7 @@ var TableBuilderView = class extends import_obsidian2.ItemView {
     this.captureState();
     const col = this.state.columns[index];
     this.state.columns.splice(index, 1);
-    const key = col.type === "dice" ? "range" : col.name;
+    const key = col.type === "dice" ? "range" : col.id;
     this.state.rows.forEach((row) => {
       delete row[key];
     });
@@ -1519,7 +1525,7 @@ var TableBuilderView = class extends import_obsidian2.ItemView {
     this.state.rows.forEach((row) => {
       this.state.columns.forEach((col) => {
         if (col.type === "regular") {
-          row[col.name] = "";
+          row[col.id] = "";
         }
       });
     });
@@ -1725,14 +1731,8 @@ var TableBuilderView = class extends import_obsidian2.ItemView {
       }
       this.captureState();
       const col = this.state.columns[colIndex];
-      const cellKey = col.type === "dice" ? "range" : col.name;
+      const cellKey = col.type === "dice" ? "range" : col.id;
       const rowsNeeded = values.length;
-      while (this.state.rows.length < rowsNeeded) {
-        this.state.rows.push({});
-      }
-      for (let i = 0; i < values.length; i++) {
-        this.state.rows[i][cellKey] = values[i];
-      }
       this.markUnsaved();
       this.buildRowGrid();
       this.schedulePreviewUpdate();
@@ -1744,8 +1744,10 @@ var TableBuilderView = class extends import_obsidian2.ItemView {
   }
   // Examples
   applyExample(diceNotation, rowCount) {
+    var _a;
     this.captureState();
     this.state.columns[0] = {
+      id: ((_a = this.state.columns[0]) == null ? void 0 : _a.id) || this.generateColumnId(),
       name: diceNotation,
       type: "dice",
       diceNotation
@@ -1945,13 +1947,14 @@ var TableBuilderView = class extends import_obsidian2.ItemView {
         new import_obsidian2.Notice("Could not parse table headers");
         return;
       }
-      const columns = headers.map((h) => {
+      const columns = headers.map((h, idx) => {
+        const id = this.generateColumnId();
         if (/^\d*d\d+$/i.test(h.trim())) {
-          return { name: h, type: "dice", diceNotation: h.toLowerCase() };
+          return { id, name: h, type: "dice", diceNotation: h.toLowerCase() };
         } else if (/^reroll$/i.test(h.trim())) {
-          return { name: h, type: "reroll" };
+          return { id, name: h, type: "reroll" };
         } else {
-          return { name: h, type: "regular" };
+          return { id, name: h, type: "regular" };
         }
       });
       const rows = [];
@@ -1961,7 +1964,7 @@ var TableBuilderView = class extends import_obsidian2.ItemView {
           const row = {};
           headers.forEach((header, idx) => {
             const col = columns[idx];
-            const key = col.type === "dice" ? "range" : col.name;
+            const key = col.type === "dice" ? "range" : col.id;
             row[key] = cells[idx] || "";
           });
           rows.push(row);
@@ -2213,8 +2216,11 @@ var TableBuilderView = class extends import_obsidian2.ItemView {
   async loadParsedTable(tableName, table, parsed) {
     const columns = [];
     const rows = [];
+    const nameToIdMap = /* @__PURE__ */ new Map();
     if ("dice" in table) {
+      const diceColId = this.generateColumnId();
       columns.push({
+        id: diceColId,
         name: table.dice,
         type: "dice",
         diceNotation: table.dice
@@ -2223,10 +2229,12 @@ var TableBuilderView = class extends import_obsidian2.ItemView {
         const firstEntry = table.entries[0];
         if (firstEntry.columns) {
           for (const colName of Object.keys(firstEntry.columns)) {
+            const colId = this.generateColumnId();
+            nameToIdMap.set(colName, colId);
             if (colName.toLowerCase() === "reroll") {
-              columns.push({ name: colName, type: "reroll" });
+              columns.push({ id: colId, name: colName, type: "reroll" });
             } else {
-              columns.push({ name: colName, type: "regular" });
+              columns.push({ id: colId, name: colName, type: "regular" });
             }
           }
         }
@@ -2237,7 +2245,8 @@ var TableBuilderView = class extends import_obsidian2.ItemView {
         };
         if (entry.columns) {
           for (const [key, value] of Object.entries(entry.columns)) {
-            row[key] = value;
+            const newKey = nameToIdMap.get(key) || key;
+            row[newKey] = value;
           }
         }
         if (entry.reroll) {
@@ -2247,14 +2256,21 @@ var TableBuilderView = class extends import_obsidian2.ItemView {
       }
     } else {
       for (const header of table.headers) {
+        const colId = this.generateColumnId();
+        nameToIdMap.set(header, colId);
         if (header.toLowerCase() === "reroll") {
-          columns.push({ name: header, type: "reroll" });
+          columns.push({ id: colId, name: header, type: "reroll" });
         } else {
-          columns.push({ name: header, type: "regular" });
+          columns.push({ id: colId, name: header, type: "regular" });
         }
       }
       for (const row of table.rows) {
-        rows.push({ ...row });
+        const migratedRow = {};
+        for (const [key, value] of Object.entries(row)) {
+          const newKey = nameToIdMap.get(key) || key;
+          migratedRow[newKey] = value;
+        }
+        rows.push(migratedRow);
       }
     }
     this.state = {
@@ -2385,7 +2401,7 @@ var TableBuilderView = class extends import_obsidian2.ItemView {
     const rerollCol = this.state.columns.find((c) => c.type === "reroll");
     if (rerollCol) {
       for (const row of this.state.rows) {
-        const rerollValue = row[rerollCol.name];
+        const rerollValue = row[rerollCol.id];
         if (rerollValue && rerollValue !== "\u2014" && rerollValue !== "-") {
           const valid = await this.validateRerollReference(rerollValue, true);
           if (!valid) {
