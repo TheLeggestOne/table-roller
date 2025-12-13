@@ -971,6 +971,8 @@ var TableBuilderView = class extends import_obsidian2.ItemView {
     this.hasUnsavedChanges = false;
     this.selectedRowIndex = 0;
     this.currentFile = null;
+    // Track the file we loaded from
+    this.activeContextMenu = null;
     // History for undo/redo
     this.history = [];
     this.historyIndex = -1;
@@ -1019,25 +1021,75 @@ var TableBuilderView = class extends import_obsidian2.ItemView {
       isPrivate: false
     };
   }
-  generateDefaultRows(diceNotation, count) {
+  generateDefaultRows(diceNotation, count, groupSize, remainder) {
     const rows = [];
     const match = diceNotation.match(/^(\d*)d(\d+)$/i);
     if (!match)
       return rows;
+    const numDice = match[1] ? parseInt(match[1]) : 1;
     const sides = parseInt(match[2]);
-    if (sides <= 20) {
-      for (let i = 1; i <= Math.min(sides, count); i++) {
-        rows.push({ range: `${i}` });
+    const minValue = numDice;
+    const maxValue = numDice * sides;
+    const totalRange = maxValue - minValue + 1;
+    if (groupSize && groupSize >= 2) {
+      const extraValues = totalRange % groupSize;
+      let currentValue = minValue;
+      const remainderStrategy = remainder || "expand-last";
+      if (remainderStrategy === "row-first" && extraValues > 0) {
+        const end = minValue + extraValues - 1;
+        if (minValue === end) {
+          rows.push({ range: `${minValue}` });
+        } else {
+          rows.push({ range: `${minValue}-${end}` });
+        }
+        currentValue = end + 1;
       }
-    } else if (sides === 100) {
-      const rangeSize = Math.floor(sides / count);
+      const mainRowCount = Math.floor(totalRange / groupSize);
+      for (let i = 0; i < mainRowCount; i++) {
+        let rangeSize = groupSize;
+        if (extraValues > 0) {
+          if (remainderStrategy === "expand-first" && i === 0) {
+            rangeSize = groupSize + extraValues;
+          } else if (remainderStrategy === "expand-last" && i === mainRowCount - 1) {
+            rangeSize = groupSize + extraValues;
+          }
+        }
+        const start = currentValue;
+        const end = Math.min(currentValue + rangeSize - 1, maxValue);
+        if (start === end) {
+          rows.push({ range: `${start}` });
+        } else {
+          rows.push({ range: `${start}-${end}` });
+        }
+        currentValue = end + 1;
+      }
+      if (remainderStrategy === "row-last" && extraValues > 0 && currentValue <= maxValue) {
+        if (currentValue === maxValue) {
+          rows.push({ range: `${maxValue}` });
+        } else {
+          rows.push({ range: `${currentValue}-${maxValue}` });
+        }
+      }
+    } else if (count < totalRange) {
+      const calculatedGroupSize = Math.floor(totalRange / count);
+      const extraValues = totalRange % count;
+      let currentValue = minValue;
       for (let i = 0; i < count; i++) {
-        const start = i * rangeSize + 1;
-        const end = i === count - 1 ? sides : (i + 1) * rangeSize;
-        rows.push({ range: `${start}-${end}` });
+        let rangeSize = calculatedGroupSize;
+        if (i === count - 1 && extraValues > 0) {
+          rangeSize = calculatedGroupSize + extraValues;
+        }
+        const start = currentValue;
+        const end = Math.min(currentValue + rangeSize - 1, maxValue);
+        if (start === end) {
+          rows.push({ range: `${start}` });
+        } else {
+          rows.push({ range: `${start}-${end}` });
+        }
+        currentValue = end + 1;
       }
     } else {
-      for (let i = 1; i <= Math.min(sides, count); i++) {
+      for (let i = minValue; i <= Math.min(maxValue, minValue + count - 1); i++) {
         rows.push({ range: `${i}` });
       }
     }
@@ -1090,33 +1142,53 @@ var TableBuilderView = class extends import_obsidian2.ItemView {
         value: col.name,
         placeholder: "Column name"
       });
+      if (col.type === "reroll") {
+        nameInput.disabled = true;
+        nameInput.style.opacity = "0.6";
+        nameInput.style.cursor = "not-allowed";
+      }
       nameInput.addEventListener("input", () => {
         this.captureState();
         col.name = nameInput.value;
+        if (col.type === "dice") {
+          col.diceNotation = nameInput.value;
+          this.buildRowGrid();
+        }
         this.markUnsaved();
-        this.buildRowGrid();
         this.schedulePreviewUpdate();
       });
       const typeLabel = colItem.createSpan({ text: `(${col.type})`, cls: "column-type" });
+      if (col.type === "dice" && col.diceNotation) {
+        const generateBtn = colItem.createEl("button", { text: "Generate Rows...", cls: "table-builder-btn-small" });
+        generateBtn.style.marginLeft = "8px";
+        generateBtn.addEventListener("click", () => this.showGenerateRowsModal(col.diceNotation));
+      }
       if (this.state.columns.length > 1) {
         const deleteBtn = colItem.createEl("button", { text: "\xD7", cls: "delete-btn" });
         deleteBtn.addEventListener("click", () => this.deleteColumn(index));
       }
     });
     const addBtns = container.createDiv({ cls: "add-column-btns" });
-    const addDiceBtn = addBtns.createEl("button", { text: "+ Dice Column", cls: "table-builder-btn" });
-    addDiceBtn.addEventListener("click", () => this.addDiceColumn());
+    const hasDiceColumn = this.state.columns.some((c) => c.type === "dice");
+    if (!hasDiceColumn) {
+      const addDiceBtn = addBtns.createEl("button", { text: "+ Dice Column", cls: "table-builder-btn" });
+      addDiceBtn.addEventListener("click", () => this.addDiceColumn());
+    }
     const addRegularBtn = addBtns.createEl("button", { text: "+ Regular Column", cls: "table-builder-btn" });
     addRegularBtn.addEventListener("click", () => this.addColumn("regular"));
-    const addRerollBtn = addBtns.createEl("button", { text: "+ Reroll Column", cls: "table-builder-btn" });
-    addRerollBtn.addEventListener("click", () => this.addColumn("reroll"));
+    const hasRerollColumn = this.state.columns.some((c) => c.type === "reroll");
+    if (!hasRerollColumn) {
+      const addRerollBtn = addBtns.createEl("button", { text: "+ Reroll Column", cls: "table-builder-btn" });
+      addRerollBtn.addEventListener("click", () => this.addColumn("reroll"));
+    }
   }
   buildDirectivesEditor(container) {
     const privateDiv = container.createDiv({ cls: "directive-item" });
+    privateDiv.title = "When enabled, this table will not appear in the table picker dropdown when rolling from other tables";
     const privateLabel = privateDiv.createEl("label");
     const privateCheckbox = privateLabel.createEl("input", { type: "checkbox" });
     privateCheckbox.checked = this.state.isPrivate;
-    privateLabel.appendText(" Private (hide from table picker)");
+    privateLabel.appendText(" Private ");
     privateCheckbox.addEventListener("change", () => {
       this.captureState();
       this.state.isPrivate = privateCheckbox.checked;
@@ -1124,12 +1196,14 @@ var TableBuilderView = class extends import_obsidian2.ItemView {
       this.schedulePreviewUpdate();
     });
     const rerollDiv = container.createDiv({ cls: "directive-item" });
-    rerollDiv.createEl("label", { text: "Table-level Reroll:" });
+    const rerollLabel = rerollDiv.createEl("label", { text: "Table-level Reroll:" });
+    rerollLabel.title = "Automatically roll on additional tables after rolling this one. Use comma-separated list (Table1,Table2) or dice notation (d6 Table1), or both";
     const rerollInput = rerollDiv.createEl("input", {
       type: "text",
       placeholder: "Table1,Table2 or d6 Table1",
       value: this.state.tableReroll || ""
     });
+    rerollInput.title = "Automatically roll on additional tables after rolling this one. Use comma-separated list (Table1,Table2) or dice notation (d6 Table1)";
     rerollInput.addEventListener("input", () => {
       this.captureState();
       this.state.tableReroll = rerollInput.value || void 0;
@@ -1146,8 +1220,13 @@ var TableBuilderView = class extends import_obsidian2.ItemView {
     this.rowGrid.empty();
     const headerRow = this.rowGrid.createDiv({ cls: "row-grid-header" });
     headerRow.createDiv({ text: "", cls: "row-number" });
-    this.state.columns.forEach((col) => {
-      headerRow.createDiv({ text: col.name, cls: "grid-cell" });
+    this.state.columns.forEach((col, colIndex) => {
+      const headerCell = headerRow.createDiv({ text: col.name, cls: "grid-cell" });
+      headerCell.addEventListener("contextmenu", (e) => {
+        e.preventDefault();
+        this.showColumnContextMenu(e, colIndex);
+      });
+      headerCell.style.cursor = "context-menu";
     });
     this.state.rows.forEach((row, rowIndex) => {
       const rowEl = this.rowGrid.createDiv({ cls: "row-grid-row" });
@@ -1392,6 +1471,10 @@ var TableBuilderView = class extends import_obsidian2.ItemView {
   }
   // Column operations
   addDiceColumn() {
+    if (this.state.columns.some((c) => c.type === "dice")) {
+      new import_obsidian2.Notice("Only one dice column is allowed");
+      return;
+    }
     const modal = new import_obsidian2.Modal(this.app);
     modal.titleEl.setText("Add Dice Column");
     modal.contentEl.createEl("label", { text: "Select dice type:" });
@@ -1400,9 +1483,28 @@ var TableBuilderView = class extends import_obsidian2.ItemView {
     select.style.padding = "8px";
     select.style.marginTop = "8px";
     select.style.marginBottom = "12px";
-    const diceOptions = ["d4", "d6", "d8", "d10", "d12", "d20", "d100"];
+    const diceOptions = ["d4", "d6", "d8", "d10", "d12", "d20", "d100", "custom"];
     diceOptions.forEach((dice) => {
-      select.createEl("option", { text: dice, value: dice });
+      select.createEl("option", { text: dice === "custom" ? "Custom..." : dice, value: dice });
+    });
+    const customContainer = modal.contentEl.createDiv();
+    customContainer.style.marginBottom = "12px";
+    customContainer.style.display = "none";
+    customContainer.createEl("label", { text: "Custom dice notation (e.g., d6, 2d6, d100):" });
+    const customInput = customContainer.createEl("input", {
+      type: "text",
+      placeholder: "d6"
+    });
+    customInput.style.width = "100%";
+    customInput.style.padding = "8px";
+    customInput.style.marginTop = "4px";
+    select.addEventListener("change", () => {
+      if (select.value === "custom") {
+        customContainer.style.display = "block";
+        customInput.focus();
+      } else {
+        customContainer.style.display = "none";
+      }
     });
     const btnContainer = modal.contentEl.createDiv();
     btnContainer.style.display = "flex";
@@ -1412,9 +1514,20 @@ var TableBuilderView = class extends import_obsidian2.ItemView {
     cancelBtn.addEventListener("click", () => modal.close());
     const addBtn = btnContainer.createEl("button", { text: "Add" });
     addBtn.addEventListener("click", () => {
+      let diceType = select.value;
+      if (diceType === "custom") {
+        diceType = customInput.value.trim().toLowerCase();
+        if (!diceType) {
+          new import_obsidian2.Notice("Please enter a dice notation");
+          return;
+        }
+        if (!/^\d*d\d+$/.test(diceType)) {
+          new import_obsidian2.Notice("Invalid dice notation. Use format like: d6, 2d6, d100");
+          return;
+        }
+      }
       this.captureState();
-      const diceType = select.value;
-      this.state.columns.push({
+      this.state.columns.unshift({
         name: diceType,
         type: "dice",
         diceNotation: diceType
@@ -1428,6 +1541,10 @@ var TableBuilderView = class extends import_obsidian2.ItemView {
     modal.open();
   }
   addColumn(type) {
+    if (type === "reroll" && this.state.columns.some((c) => c.type === "reroll")) {
+      new import_obsidian2.Notice("Only one reroll column is allowed");
+      return;
+    }
     this.captureState();
     const name = type === "reroll" ? "reroll" : `Column ${this.state.columns.length}`;
     this.state.columns.push({ name, type });
@@ -1601,6 +1718,93 @@ var TableBuilderView = class extends import_obsidian2.ItemView {
     this.buildLeftPanel();
     this.schedulePreviewUpdate();
   }
+  // Column operations
+  showColumnContextMenu(e, colIndex) {
+    if (this.activeContextMenu && this.activeContextMenu.parentNode) {
+      this.activeContextMenu.parentNode.removeChild(this.activeContextMenu);
+    }
+    const menu = document.createElement("div");
+    menu.className = "column-context-menu";
+    menu.style.position = "fixed";
+    menu.style.left = `${e.clientX}px`;
+    menu.style.top = `${e.clientY}px`;
+    menu.style.zIndex = "10000";
+    menu.style.background = "var(--background-secondary)";
+    menu.style.border = "1px solid var(--background-modifier-border)";
+    menu.style.borderRadius = "4px";
+    menu.style.padding = "4px";
+    menu.style.minWidth = "150px";
+    const pasteOption = menu.createEl("div", {
+      text: "Paste into column",
+      cls: "context-menu-item"
+    });
+    pasteOption.style.padding = "6px 12px";
+    pasteOption.style.cursor = "pointer";
+    pasteOption.addEventListener("mouseenter", () => {
+      pasteOption.style.background = "var(--background-modifier-hover)";
+    });
+    pasteOption.addEventListener("mouseleave", () => {
+      pasteOption.style.background = "";
+    });
+    pasteOption.addEventListener("click", async () => {
+      await this.pasteIntoColumn(colIndex);
+      if (menu.parentNode) {
+        document.body.removeChild(menu);
+      }
+      this.activeContextMenu = null;
+    });
+    document.body.appendChild(menu);
+    this.activeContextMenu = menu;
+    const closeMenu = (event) => {
+      if (!menu.contains(event.target)) {
+        if (menu.parentNode) {
+          document.body.removeChild(menu);
+        }
+        this.activeContextMenu = null;
+        document.removeEventListener("click", closeMenu);
+      }
+    };
+    setTimeout(() => document.addEventListener("click", closeMenu), 0);
+  }
+  async pasteIntoColumn(colIndex) {
+    try {
+      const text = await navigator.clipboard.readText();
+      if (!text.trim()) {
+        new import_obsidian2.Notice("Clipboard is empty");
+        return;
+      }
+      let values;
+      if (text.includes("	")) {
+        const rows = text.split(/\r?\n/).filter((r) => r.trim());
+        values = rows.map((row) => row.split("	")[0].trim());
+      } else if (text.includes(",") && !text.includes("\n")) {
+        values = text.split(",").map((v) => v.trim()).filter((v) => v);
+      } else {
+        values = text.split(/\r?\n/).map((v) => v.trim()).filter((v) => v);
+      }
+      if (values.length === 0) {
+        new import_obsidian2.Notice("No valid data to paste");
+        return;
+      }
+      this.captureState();
+      const col = this.state.columns[colIndex];
+      const cellKey = col.type === "dice" ? "range" : col.name;
+      const rowsNeeded = values.length;
+      while (this.state.rows.length < rowsNeeded) {
+        this.state.rows.push({});
+      }
+      for (let i = 0; i < values.length; i++) {
+        this.state.rows[i][cellKey] = values[i];
+      }
+      this.markUnsaved();
+      this.buildRowGrid();
+      this.schedulePreviewUpdate();
+      new import_obsidian2.Notice(`Pasted ${values.length} values into ${col.name}`);
+    } catch (error) {
+      console.error("Error pasting into column:", error);
+      new import_obsidian2.Notice("Failed to paste from clipboard");
+    }
+  }
   // Examples
   applyExample(diceNotation, rowCount) {
     this.captureState();
@@ -1615,6 +1819,110 @@ var TableBuilderView = class extends import_obsidian2.ItemView {
     this.buildLeftPanel();
     this.schedulePreviewUpdate();
     new import_obsidian2.Notice(`Applied ${diceNotation} with ${rowCount} rows`);
+  }
+  generateRows(diceNotation, rowCount, groupSize, remainder) {
+    this.captureState();
+    this.state.rows = this.generateDefaultRows(diceNotation, rowCount, groupSize, remainder);
+    this.markUnsaved();
+    this.buildRowGrid();
+    this.schedulePreviewUpdate();
+    new import_obsidian2.Notice(`Generated ${rowCount} rows for ${diceNotation}`);
+  }
+  showGenerateRowsModal(diceNotation) {
+    const modal = new import_obsidian2.Modal(this.app);
+    modal.titleEl.setText(`Generate Rows for ${diceNotation}`);
+    const match = diceNotation.match(/^(\d*)d(\d+)$/i);
+    if (!match) {
+      new import_obsidian2.Notice("Invalid dice notation");
+      return;
+    }
+    const numDice = match[1] ? parseInt(match[1]) : 1;
+    const sides = parseInt(match[2]);
+    const minValue = numDice;
+    const maxValue = numDice * sides;
+    const totalRange = maxValue - minValue + 1;
+    const generateOptions = [];
+    generateOptions.push({ name: `All values (${totalRange} rows)`, count: totalRange });
+    const commonGroupSizes = [2, 3, 5, 10];
+    for (const groupSize of commonGroupSizes) {
+      if (groupSize < totalRange) {
+        const rowCount = Math.ceil(totalRange / groupSize);
+        generateOptions.push({ name: `Every ${groupSize} (~${rowCount} rows)`, count: rowCount, groupSize });
+      }
+    }
+    const formContainer = modal.contentEl.createDiv();
+    formContainer.style.marginBottom = "12px";
+    const optionLabel = formContainer.createEl("label", { text: "Range option:" });
+    optionLabel.style.display = "block";
+    optionLabel.style.marginBottom = "4px";
+    const optionSelect = formContainer.createEl("select");
+    optionSelect.style.width = "100%";
+    optionSelect.style.padding = "8px";
+    optionSelect.style.marginBottom = "12px";
+    generateOptions.forEach((option) => {
+      optionSelect.createEl("option", {
+        text: option.name,
+        value: option.groupSize ? option.groupSize.toString() : "all"
+      });
+    });
+    optionSelect.createEl("option", { text: "Custom", value: "custom" });
+    const customInputContainer = formContainer.createDiv();
+    customInputContainer.style.display = "none";
+    customInputContainer.style.marginBottom = "12px";
+    const customLabel = customInputContainer.createEl("label", { text: "Range (values per row):" });
+    customLabel.style.display = "block";
+    customLabel.style.marginBottom = "4px";
+    const customInput = customInputContainer.createEl("input", {
+      type: "number",
+      placeholder: "2",
+      attr: { min: "2", max: totalRange.toString() }
+    });
+    customInput.style.width = "100%";
+    customInput.style.padding = "8px";
+    optionSelect.addEventListener("change", () => {
+      customInputContainer.style.display = optionSelect.value === "custom" ? "block" : "none";
+    });
+    const remainderContainer = formContainer.createDiv();
+    remainderContainer.style.marginBottom = "12px";
+    const remainderLabel = remainderContainer.createEl("label", { text: "Handle remainder:" });
+    remainderLabel.style.display = "block";
+    remainderLabel.style.marginBottom = "4px";
+    const remainderSelect = remainderContainer.createEl("select");
+    remainderSelect.style.width = "100%";
+    remainderSelect.style.padding = "8px";
+    remainderSelect.createEl("option", { text: "Expand first row (add to first range)", value: "expand-first" });
+    remainderSelect.createEl("option", { text: "Expand last row (add to last range)", value: "expand-last", attr: { selected: "selected" } });
+    remainderSelect.createEl("option", { text: "Additional row at start", value: "row-first" });
+    remainderSelect.createEl("option", { text: "Additional row at end", value: "row-last" });
+    const generateBtn = formContainer.createEl("button", {
+      text: "Generate",
+      cls: "table-builder-btn"
+    });
+    generateBtn.style.width = "100%";
+    generateBtn.addEventListener("click", () => {
+      const selectedValue = optionSelect.value;
+      let groupSize;
+      if (selectedValue === "all") {
+        groupSize = void 0;
+      } else if (selectedValue === "custom") {
+        groupSize = parseInt(customInput.value);
+        if (!groupSize || groupSize < 2) {
+          new import_obsidian2.Notice("Range must be at least 2");
+          return;
+        }
+        if (groupSize > totalRange) {
+          new import_obsidian2.Notice(`Range cannot exceed total range (${totalRange})`);
+          return;
+        }
+      } else {
+        groupSize = parseInt(selectedValue);
+      }
+      const remainder = remainderSelect.value;
+      const rowCount = groupSize ? Math.ceil(totalRange / groupSize) : totalRange;
+      this.generateRows(diceNotation, rowCount, groupSize, remainder);
+      modal.close();
+    });
+    modal.open();
   }
   // Template operations
   async saveAsTemplate() {
