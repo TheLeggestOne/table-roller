@@ -1666,42 +1666,115 @@ export class TableBuilderView extends ItemView {
 			return;
 		}
 		
-		// Simple file picker modal
+		// File picker modal with search
 		const modal = new Modal(this.app);
 		modal.titleEl.setText('Select File to Append To');
 		
+		// Search input
+		const searchInput = modal.contentEl.createEl('input', {
+			type: 'text',
+			placeholder: 'Search files...'
+		});
+		searchInput.style.width = '100%';
+		searchInput.style.padding = '8px';
+		searchInput.style.marginBottom = '12px';
+		searchInput.style.fontSize = '14px';
+		
+		// File list container
 		const fileList = modal.contentEl.createDiv({ cls: 'file-list' });
 		fileList.style.maxHeight = '400px';
 		fileList.style.overflowY = 'auto';
 		
-		files.forEach(file => {
-			const fileBtn = fileList.createEl('button', { 
-				text: file.path,
-				cls: 'file-option'
-			});
-			fileBtn.style.display = 'block';
-			fileBtn.style.width = '100%';
-			fileBtn.style.textAlign = 'left';
-			fileBtn.style.padding = '8px';
-			fileBtn.style.marginBottom = '4px';
-			fileBtn.style.border = '1px solid var(--background-modifier-border)';
-			fileBtn.style.background = 'var(--background-secondary)';
-			fileBtn.style.cursor = 'pointer';
+		let fileButtons: Array<{ button: HTMLElement, file: TFile }> = [];
+		
+		// Function to render file list
+		const renderFiles = (searchTerm: string = '') => {
+			fileList.empty();
+			fileButtons = [];
 			
-			fileBtn.addEventListener('click', async () => {
-				modal.close();
-				await this.appendToSpecificFile(file);
-			});
+			// Filter and sort files
+			let filteredFiles = files;
+			if (searchTerm) {
+				const lower = searchTerm.toLowerCase();
+				filteredFiles = files
+					.filter(f => f.path.toLowerCase().includes(lower))
+					.sort((a, b) => {
+						// Prioritize files that start with the search term
+						const aStarts = a.basename.toLowerCase().startsWith(lower);
+						const bStarts = b.basename.toLowerCase().startsWith(lower);
+						if (aStarts && !bStarts) return -1;
+						if (!aStarts && bStarts) return 1;
+						
+						// Then sort by how early the match appears
+						const aIndex = a.path.toLowerCase().indexOf(lower);
+						const bIndex = b.path.toLowerCase().indexOf(lower);
+						if (aIndex !== bIndex) return aIndex - bIndex;
+						
+						// Finally alphabetical
+						return a.path.localeCompare(b.path);
+					});
+			} else {
+				filteredFiles = [...files].sort((a, b) => a.path.localeCompare(b.path));
+			}
 			
-			fileBtn.addEventListener('mouseenter', () => {
-				fileBtn.style.background = 'var(--background-modifier-hover)';
-			});
-			fileBtn.addEventListener('mouseleave', () => {
+			if (filteredFiles.length === 0) {
+				const noResults = fileList.createDiv({ text: 'No files match your search' });
+				noResults.style.padding = '16px';
+				noResults.style.textAlign = 'center';
+				noResults.style.color = 'var(--text-muted)';
+				return;
+			}
+			
+			filteredFiles.forEach(file => {
+				const fileBtn = fileList.createEl('button', { 
+					text: file.path,
+					cls: 'file-option'
+				});
+				fileBtn.style.display = 'block';
+				fileBtn.style.width = '100%';
+				fileBtn.style.textAlign = 'left';
+				fileBtn.style.padding = '8px';
+				fileBtn.style.marginBottom = '4px';
+				fileBtn.style.border = '1px solid var(--background-modifier-border)';
 				fileBtn.style.background = 'var(--background-secondary)';
+				fileBtn.style.cursor = 'pointer';
+				
+				fileBtn.addEventListener('click', async () => {
+					modal.close();
+					await this.appendToSpecificFile(file);
+				});
+				
+				fileBtn.addEventListener('mouseenter', () => {
+					fileBtn.style.background = 'var(--background-modifier-hover)';
+				});
+				fileBtn.addEventListener('mouseleave', () => {
+					fileBtn.style.background = 'var(--background-secondary)';
+				});
+				
+				fileButtons.push({ button: fileBtn, file });
 			});
+		};
+		
+		// Initial render
+		renderFiles();
+		
+		// Search input handler
+		searchInput.addEventListener('input', () => {
+			renderFiles(searchInput.value);
+		});
+		
+		// Focus search input and select first result on Enter
+		searchInput.addEventListener('keydown', (e) => {
+			if (e.key === 'Enter' && fileButtons.length > 0) {
+				modal.close();
+				this.appendToSpecificFile(fileButtons[0].file);
+			}
 		});
 		
 		modal.open();
+		
+		// Auto-focus search input
+		setTimeout(() => searchInput.focus(), 50);
 	}
 
 	private async appendToSpecificFile(file: TFile): Promise<void> {
@@ -2201,6 +2274,11 @@ export class TableBuilderView extends ItemView {
 			// Handle multi-roll syntax
 			const multiRollMatch = name.match(/^(\d*d\d+)\s+(.+)$/i);
 			const actualTableName = multiRollMatch ? multiRollMatch[2].trim() : name;
+			
+			// Allow self-reference to the table being edited
+			if (actualTableName === this.state.tableName) {
+				continue;
+			}
 			
 			try {
 				const tableFile = this.roller.getTableFile(actualTableName);

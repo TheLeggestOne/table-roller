@@ -89,18 +89,18 @@ export class TableRollerCore {
 	/**
 	 * Roll on a specific table
 	 */
-	private rollOnTable(tableName: string, table: Table, namespace: string, sourceFile: string, modifier: number = 0): RollResult {
+	private rollOnTable(tableName: string, table: Table, namespace: string, sourceFile: string, modifier: number = 0, callChain: string[] = []): RollResult {
 		let result: RollResult;
 
 		if (this.isDiceTable(table)) {
-			result = this.rollDiceTable(tableName, table, namespace, sourceFile, modifier);
+			result = this.rollDiceTable(tableName, table, namespace, sourceFile, modifier, callChain);
 		} else {
 			result = this.rollSimpleTable(tableName, table, namespace, sourceFile);
 		}
 
 		// Handle table-level reroll (applies to all results)
 		if (table.reroll) {
-			const tableRerolls = this.resolveRerolls(table.reroll, namespace, 0);
+			const tableRerolls = this.resolveRerolls(table.reroll, namespace, 0, callChain);
 			if (result.nestedRolls) {
 				result.nestedRolls.push(...tableRerolls);
 			} else {
@@ -114,19 +114,60 @@ export class TableRollerCore {
 	/**
 	 * Roll on a dice-based table
 	 */
-	private rollDiceTable(tableName: string, table: DiceTable, namespace: string, sourceFile: string, modifier: number = 0): RollResult {
-		const baseRoll = DiceRoller.roll(table.dice);
-		let rollValue = baseRoll + modifier;
-
-		// Clamp rollValue to table bounds when modifier causes out-of-bounds results
-		const minBound = Math.min(...table.entries.map(e => e.min));
-		const maxBound = Math.max(...table.entries.map(e => e.max));
-		rollValue = Math.max(minBound, Math.min(maxBound, rollValue));
-
-		const entry = table.entries.find(e => rollValue >= e.min && rollValue <= e.max);
-
-		if (!entry) {
-			throw new Error(`No entry found for roll ${rollValue} on table ${tableName}`);
+	private rollDiceTable(tableName: string, table: DiceTable, namespace: string, sourceFile: string, modifier: number = 0, callChain: string[] = []): RollResult {
+		const tableIdentifier = `${namespace}.${tableName}`;
+		const isSelfReference = callChain.includes(tableIdentifier);
+		
+		// Filter out self-rerollable entries if we're in a self-reference chain
+		let availableEntries = table.entries;
+		if (isSelfReference) {
+			availableEntries = table.entries.filter(entry => {
+				if (!entry.reroll) return true; // No reroll, always available
+				
+				// Check if this entry rerolls back to self
+				const rerollTables = entry.reroll.split(',').map(t => t.trim());
+				for (const rerollRef of rerollTables) {
+					// Handle multi-roll syntax (e.g., "2d6 TableName")
+					const multiRollMatch = rerollRef.match(/^(\d*d\d+)\s+(.+)$/i);
+					const rerollTableName = multiRollMatch ? multiRollMatch[2].trim() : rerollRef;
+					
+					// Check if this reroll references self
+					if (rerollTableName === tableName || rerollTableName === tableIdentifier) {
+						return false; // Exclude this entry
+					}
+				}
+				return true; // Entry doesn't reroll to self
+			});
+			
+			if (availableEntries.length === 0) {
+				throw new Error(`All entries in ${tableName} would cause infinite self-reroll`);
+			}
+		}
+		
+		let entry = null;
+		let rollValue = 0;
+		
+		if (isSelfReference) {
+			// For self-references, pick a random available entry directly to avoid re-roll loops
+			const randomEntry = availableEntries[Math.floor(Math.random() * availableEntries.length)];
+			entry = randomEntry;
+			// Use a random value within this entry's range for display purposes
+			rollValue = randomEntry.min + Math.floor(Math.random() * (randomEntry.max - randomEntry.min + 1));
+		} else {
+			// Normal rolling - try to match roll to entry
+			const baseRoll = DiceRoller.roll(table.dice);
+			rollValue = baseRoll + modifier;
+			
+			// Clamp to table bounds
+			const minBound = Math.min(...table.entries.map(e => e.min));
+			const maxBound = Math.max(...table.entries.map(e => e.max));
+			rollValue = Math.max(minBound, Math.min(maxBound, rollValue));
+			
+			entry = availableEntries.find(e => rollValue >= e.min && rollValue <= e.max);
+			
+			if (!entry) {
+				throw new Error(`No entry found for roll ${rollValue} on table ${tableName}`);
+			}
 		}
 
 		const result: RollResult = {
@@ -141,7 +182,7 @@ export class TableRollerCore {
 
 		// Handle per-row reroll
 		if (entry.reroll) {
-			result.nestedRolls = this.resolveRerolls(entry.reroll, namespace, 0);
+			result.nestedRolls = this.resolveRerolls(entry.reroll, namespace, 0, callChain);
 		}
 
 		return result;
@@ -173,8 +214,9 @@ export class TableRollerCore {
 	/**
 	 * Resolve reroll references (comma-delimited table names)
 	 * Supports multi-roll syntax: d6 TableName, 1d6 TableName, 2d8 TableName, etc.
+	 * Deduplicates results for self-referencing tables to ensure unique results.
 	 */
-	private resolveRerolls(rerollString: string, contextNamespace: string, modifier: number = 0): RollResult[] {
+	private resolveRerolls(rerollString: string, contextNamespace: string, modifier: number = 0, callChain: string[] = []): RollResult[] {
 		const tableNames = rerollString.split(',').map(t => t.trim()).filter(t => t);
 		const results: RollResult[] = [];
 
@@ -199,13 +241,35 @@ export class TableRollerCore {
 			
 			const tableData = this.findTable(actualTableName, contextNamespace);
 			if (tableData) {
-				try {
-					// Roll on the table multiple times if needed
-					for (let i = 0; i < rollCount; i++) {
-						results.push(this.rollOnTable(actualTableName, tableData.table, tableData.namespace, tableData.file.path, modifier));
+				// Create a unique identifier for this table (namespace.tablename)
+				const tableIdentifier = `${tableData.namespace}.${actualTableName}`;
+				
+				// Check if this table is already in the call chain (self-reference)
+				if (callChain.includes(tableIdentifier)) {
+					// Self-referencing table - deduplicate results
+					try {
+						const uniqueResults = this.rollUniqueResults(
+							actualTableName,
+							tableData.table,
+							tableData.namespace,
+							tableData.file.path,
+							rollCount,
+							modifier,
+							[...callChain, tableIdentifier]
+						);
+						results.push(...uniqueResults);
+					} catch (error) {
+						console.warn(`Failed to roll on ${actualTableName}:`, error);
 					}
-				} catch (error) {
-					console.warn(`Failed to roll on ${actualTableName}:`, error);
+				} else {
+					// Not a self-reference - roll multiple times (duplicates allowed)
+					try {
+						for (let i = 0; i < rollCount; i++) {
+							results.push(this.rollOnTable(actualTableName, tableData.table, tableData.namespace, tableData.file.path, modifier, [...callChain, tableIdentifier]));
+						}
+					} catch (error) {
+						console.warn(`Failed to roll on ${actualTableName}:`, error);
+					}
 				}
 			} else {
 				console.warn(`Table not found for reroll: ${actualTableName}`);
@@ -213,6 +277,54 @@ export class TableRollerCore {
 		}
 
 		return results;
+	}
+
+	/**
+	 * Roll on a table multiple times and return unique results when possible
+	 * Used for self-referencing tables. Returns unique results first, then duplicates if needed.
+	 */
+	private rollUniqueResults(
+		tableName: string,
+		table: Table,
+		namespace: string,
+		sourceFile: string,
+		desiredCount: number,
+		modifier: number,
+		callChain: string[]
+	): RollResult[] {
+		const allResults: RollResult[] = [];
+		const uniqueResults: RollResult[] = [];
+		const seenResults = new Set<string>();
+		const maxUniqueAttempts = desiredCount * 10; // Try hard to find unique results
+		let attempts = 0;
+
+		// First pass: try to get as many unique results as possible
+		while (uniqueResults.length < desiredCount && attempts < maxUniqueAttempts) {
+			attempts++;
+			
+			const result = this.rollOnTable(tableName, table, namespace, sourceFile, modifier, callChain);
+			
+			// Create a unique key from the result (use the main result text)
+			const resultKey = result.result;
+			
+			if (!seenResults.has(resultKey)) {
+				seenResults.add(resultKey);
+				uniqueResults.push(result);
+			}
+		}
+
+		allResults.push(...uniqueResults);
+
+		// If we still need more results to reach desiredCount, add duplicates
+		if (allResults.length < desiredCount) {
+			const remaining = desiredCount - allResults.length;
+			for (let i = 0; i < remaining; i++) {
+				const result = this.rollOnTable(tableName, table, namespace, sourceFile, modifier, callChain);
+				allResults.push(result);
+			}
+		}
+
+		return allResults;
 	}
 
 	/**

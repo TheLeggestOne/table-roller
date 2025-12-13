@@ -369,15 +369,15 @@ var TableRollerCore = class {
   /**
    * Roll on a specific table
    */
-  rollOnTable(tableName, table, namespace, sourceFile, modifier = 0) {
+  rollOnTable(tableName, table, namespace, sourceFile, modifier = 0, callChain = []) {
     let result;
     if (this.isDiceTable(table)) {
-      result = this.rollDiceTable(tableName, table, namespace, sourceFile, modifier);
+      result = this.rollDiceTable(tableName, table, namespace, sourceFile, modifier, callChain);
     } else {
       result = this.rollSimpleTable(tableName, table, namespace, sourceFile);
     }
     if (table.reroll) {
-      const tableRerolls = this.resolveRerolls(table.reroll, namespace, 0);
+      const tableRerolls = this.resolveRerolls(table.reroll, namespace, 0, callChain);
       if (result.nestedRolls) {
         result.nestedRolls.push(...tableRerolls);
       } else {
@@ -389,15 +389,44 @@ var TableRollerCore = class {
   /**
    * Roll on a dice-based table
    */
-  rollDiceTable(tableName, table, namespace, sourceFile, modifier = 0) {
-    const baseRoll = DiceRoller.roll(table.dice);
-    let rollValue = baseRoll + modifier;
-    const minBound = Math.min(...table.entries.map((e) => e.min));
-    const maxBound = Math.max(...table.entries.map((e) => e.max));
-    rollValue = Math.max(minBound, Math.min(maxBound, rollValue));
-    const entry = table.entries.find((e) => rollValue >= e.min && rollValue <= e.max);
-    if (!entry) {
-      throw new Error(`No entry found for roll ${rollValue} on table ${tableName}`);
+  rollDiceTable(tableName, table, namespace, sourceFile, modifier = 0, callChain = []) {
+    const tableIdentifier = `${namespace}.${tableName}`;
+    const isSelfReference = callChain.includes(tableIdentifier);
+    let availableEntries = table.entries;
+    if (isSelfReference) {
+      availableEntries = table.entries.filter((entry2) => {
+        if (!entry2.reroll)
+          return true;
+        const rerollTables = entry2.reroll.split(",").map((t) => t.trim());
+        for (const rerollRef of rerollTables) {
+          const multiRollMatch = rerollRef.match(/^(\d*d\d+)\s+(.+)$/i);
+          const rerollTableName = multiRollMatch ? multiRollMatch[2].trim() : rerollRef;
+          if (rerollTableName === tableName || rerollTableName === tableIdentifier) {
+            return false;
+          }
+        }
+        return true;
+      });
+      if (availableEntries.length === 0) {
+        throw new Error(`All entries in ${tableName} would cause infinite self-reroll`);
+      }
+    }
+    let entry = null;
+    let rollValue = 0;
+    if (isSelfReference) {
+      const randomEntry = availableEntries[Math.floor(Math.random() * availableEntries.length)];
+      entry = randomEntry;
+      rollValue = randomEntry.min + Math.floor(Math.random() * (randomEntry.max - randomEntry.min + 1));
+    } else {
+      const baseRoll = DiceRoller.roll(table.dice);
+      rollValue = baseRoll + modifier;
+      const minBound = Math.min(...table.entries.map((e) => e.min));
+      const maxBound = Math.max(...table.entries.map((e) => e.max));
+      rollValue = Math.max(minBound, Math.min(maxBound, rollValue));
+      entry = availableEntries.find((e) => rollValue >= e.min && rollValue <= e.max);
+      if (!entry) {
+        throw new Error(`No entry found for roll ${rollValue} on table ${tableName}`);
+      }
     }
     const result = {
       tableName,
@@ -409,7 +438,7 @@ var TableRollerCore = class {
       sourceFile
     };
     if (entry.reroll) {
-      result.nestedRolls = this.resolveRerolls(entry.reroll, namespace, 0);
+      result.nestedRolls = this.resolveRerolls(entry.reroll, namespace, 0, callChain);
     }
     return result;
   }
@@ -435,8 +464,9 @@ var TableRollerCore = class {
   /**
    * Resolve reroll references (comma-delimited table names)
    * Supports multi-roll syntax: d6 TableName, 1d6 TableName, 2d8 TableName, etc.
+   * Deduplicates results for self-referencing tables to ensure unique results.
    */
-  resolveRerolls(rerollString, contextNamespace, modifier = 0) {
+  resolveRerolls(rerollString, contextNamespace, modifier = 0, callChain = []) {
     const tableNames = rerollString.split(",").map((t) => t.trim()).filter((t) => t);
     const results = [];
     for (const name of tableNames) {
@@ -454,18 +484,65 @@ var TableRollerCore = class {
       }
       const tableData = this.findTable(actualTableName, contextNamespace);
       if (tableData) {
-        try {
-          for (let i = 0; i < rollCount; i++) {
-            results.push(this.rollOnTable(actualTableName, tableData.table, tableData.namespace, tableData.file.path, modifier));
+        const tableIdentifier = `${tableData.namespace}.${actualTableName}`;
+        if (callChain.includes(tableIdentifier)) {
+          try {
+            const uniqueResults = this.rollUniqueResults(
+              actualTableName,
+              tableData.table,
+              tableData.namespace,
+              tableData.file.path,
+              rollCount,
+              modifier,
+              [...callChain, tableIdentifier]
+            );
+            results.push(...uniqueResults);
+          } catch (error) {
+            console.warn(`Failed to roll on ${actualTableName}:`, error);
           }
-        } catch (error) {
-          console.warn(`Failed to roll on ${actualTableName}:`, error);
+        } else {
+          try {
+            for (let i = 0; i < rollCount; i++) {
+              results.push(this.rollOnTable(actualTableName, tableData.table, tableData.namespace, tableData.file.path, modifier, [...callChain, tableIdentifier]));
+            }
+          } catch (error) {
+            console.warn(`Failed to roll on ${actualTableName}:`, error);
+          }
         }
       } else {
         console.warn(`Table not found for reroll: ${actualTableName}`);
       }
     }
     return results;
+  }
+  /**
+   * Roll on a table multiple times and return unique results when possible
+   * Used for self-referencing tables. Returns unique results first, then duplicates if needed.
+   */
+  rollUniqueResults(tableName, table, namespace, sourceFile, desiredCount, modifier, callChain) {
+    const allResults = [];
+    const uniqueResults = [];
+    const seenResults = /* @__PURE__ */ new Set();
+    const maxUniqueAttempts = desiredCount * 10;
+    let attempts = 0;
+    while (uniqueResults.length < desiredCount && attempts < maxUniqueAttempts) {
+      attempts++;
+      const result = this.rollOnTable(tableName, table, namespace, sourceFile, modifier, callChain);
+      const resultKey = result.result;
+      if (!seenResults.has(resultKey)) {
+        seenResults.add(resultKey);
+        uniqueResults.push(result);
+      }
+    }
+    allResults.push(...uniqueResults);
+    if (allResults.length < desiredCount) {
+      const remaining = desiredCount - allResults.length;
+      for (let i = 0; i < remaining; i++) {
+        const result = this.rollOnTable(tableName, table, namespace, sourceFile, modifier, callChain);
+        allResults.push(result);
+      }
+    }
+    return allResults;
   }
   /**
    * Find a table by name with namespace resolution
@@ -2079,34 +2156,85 @@ var TableBuilderView = class extends import_obsidian2.ItemView {
     }
     const modal = new import_obsidian2.Modal(this.app);
     modal.titleEl.setText("Select File to Append To");
+    const searchInput = modal.contentEl.createEl("input", {
+      type: "text",
+      placeholder: "Search files..."
+    });
+    searchInput.style.width = "100%";
+    searchInput.style.padding = "8px";
+    searchInput.style.marginBottom = "12px";
+    searchInput.style.fontSize = "14px";
     const fileList = modal.contentEl.createDiv({ cls: "file-list" });
     fileList.style.maxHeight = "400px";
     fileList.style.overflowY = "auto";
-    files.forEach((file) => {
-      const fileBtn = fileList.createEl("button", {
-        text: file.path,
-        cls: "file-option"
-      });
-      fileBtn.style.display = "block";
-      fileBtn.style.width = "100%";
-      fileBtn.style.textAlign = "left";
-      fileBtn.style.padding = "8px";
-      fileBtn.style.marginBottom = "4px";
-      fileBtn.style.border = "1px solid var(--background-modifier-border)";
-      fileBtn.style.background = "var(--background-secondary)";
-      fileBtn.style.cursor = "pointer";
-      fileBtn.addEventListener("click", async () => {
-        modal.close();
-        await this.appendToSpecificFile(file);
-      });
-      fileBtn.addEventListener("mouseenter", () => {
-        fileBtn.style.background = "var(--background-modifier-hover)";
-      });
-      fileBtn.addEventListener("mouseleave", () => {
+    let fileButtons = [];
+    const renderFiles = (searchTerm = "") => {
+      fileList.empty();
+      fileButtons = [];
+      let filteredFiles = files;
+      if (searchTerm) {
+        const lower = searchTerm.toLowerCase();
+        filteredFiles = files.filter((f) => f.path.toLowerCase().includes(lower)).sort((a, b) => {
+          const aStarts = a.basename.toLowerCase().startsWith(lower);
+          const bStarts = b.basename.toLowerCase().startsWith(lower);
+          if (aStarts && !bStarts)
+            return -1;
+          if (!aStarts && bStarts)
+            return 1;
+          const aIndex = a.path.toLowerCase().indexOf(lower);
+          const bIndex = b.path.toLowerCase().indexOf(lower);
+          if (aIndex !== bIndex)
+            return aIndex - bIndex;
+          return a.path.localeCompare(b.path);
+        });
+      } else {
+        filteredFiles = [...files].sort((a, b) => a.path.localeCompare(b.path));
+      }
+      if (filteredFiles.length === 0) {
+        const noResults = fileList.createDiv({ text: "No files match your search" });
+        noResults.style.padding = "16px";
+        noResults.style.textAlign = "center";
+        noResults.style.color = "var(--text-muted)";
+        return;
+      }
+      filteredFiles.forEach((file) => {
+        const fileBtn = fileList.createEl("button", {
+          text: file.path,
+          cls: "file-option"
+        });
+        fileBtn.style.display = "block";
+        fileBtn.style.width = "100%";
+        fileBtn.style.textAlign = "left";
+        fileBtn.style.padding = "8px";
+        fileBtn.style.marginBottom = "4px";
+        fileBtn.style.border = "1px solid var(--background-modifier-border)";
         fileBtn.style.background = "var(--background-secondary)";
+        fileBtn.style.cursor = "pointer";
+        fileBtn.addEventListener("click", async () => {
+          modal.close();
+          await this.appendToSpecificFile(file);
+        });
+        fileBtn.addEventListener("mouseenter", () => {
+          fileBtn.style.background = "var(--background-modifier-hover)";
+        });
+        fileBtn.addEventListener("mouseleave", () => {
+          fileBtn.style.background = "var(--background-secondary)";
+        });
+        fileButtons.push({ button: fileBtn, file });
       });
+    };
+    renderFiles();
+    searchInput.addEventListener("input", () => {
+      renderFiles(searchInput.value);
+    });
+    searchInput.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && fileButtons.length > 0) {
+        modal.close();
+        this.appendToSpecificFile(fileButtons[0].file);
+      }
     });
     modal.open();
+    setTimeout(() => searchInput.focus(), 50);
   }
   async appendToSpecificFile(file) {
     try {
@@ -2483,6 +2611,9 @@ var TableBuilderView = class extends import_obsidian2.ItemView {
     for (const name of tableNames) {
       const multiRollMatch = name.match(/^(\d*d\d+)\s+(.+)$/i);
       const actualTableName = multiRollMatch ? multiRollMatch[2].trim() : name;
+      if (actualTableName === this.state.tableName) {
+        continue;
+      }
       try {
         const tableFile = this.roller.getTableFile(actualTableName);
         if (!tableFile) {
