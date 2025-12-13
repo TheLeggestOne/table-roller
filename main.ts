@@ -1,6 +1,6 @@
 import { Plugin } from 'obsidian';
 import { TableRollerCore } from './src/services/TableRollerCore';
-import { TableSelectorModal, RollResultModal } from './src/ui/modals';
+import { TableSelectorModal, RollResultModal, ErrorModal } from './src/ui/modals';
 
 export default class TableRollerPlugin extends Plugin {
 	private roller: TableRollerCore;
@@ -50,6 +50,15 @@ export default class TableRollerPlugin extends Plugin {
 						
 						performRoll();
 					} catch (error) {
+						const errorMessage = error instanceof Error ? error.message : String(error);
+						
+						// Check if this is an ambiguous table reference error
+						if (errorMessage.includes('Ambiguous table reference')) {
+							new ErrorModal(this.app, 'Ambiguous Table Reference', errorMessage).open();
+						} else {
+							// Show generic error modal for other errors
+							new ErrorModal(this.app, 'Error', `Failed to roll on table:\n\n${errorMessage}`).open();
+						}
 						console.error('Error rolling on table:', error);
 					}
 				}, this.roller);

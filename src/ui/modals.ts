@@ -544,3 +544,47 @@ export class SaveFileModal extends Modal {
 		contentEl.empty();
 	}
 }
+
+/**
+ * Modal for displaying error messages
+ */
+export class ErrorModal extends Modal {
+	private title: string;
+	private message: string;
+
+	constructor(app: App, title: string, message: string) {
+		super(app);
+		this.title = title;
+		this.message = message;
+	}
+
+	onOpen() {
+		const { contentEl } = this;
+		contentEl.empty();
+
+		contentEl.createEl('h2', { text: this.title });
+
+		const messageContainer = contentEl.createDiv();
+		messageContainer.style.marginTop = '16px';
+		messageContainer.style.marginBottom = '24px';
+		messageContainer.style.lineHeight = '1.6';
+		messageContainer.style.whiteSpace = 'pre-wrap';
+		messageContainer.setText(this.message);
+
+		const buttonContainer = contentEl.createDiv();
+		buttonContainer.style.display = 'flex';
+		buttonContainer.style.justifyContent = 'center';
+		buttonContainer.style.marginTop = '24px';
+
+		const closeButton = buttonContainer.createEl('button', { text: 'OK' });
+		closeButton.style.padding = '8px 24px';
+		closeButton.addEventListener('click', () => {
+			this.close();
+		});
+	}
+
+	onClose() {
+		const { contentEl } = this;
+		contentEl.empty();
+	}
+}

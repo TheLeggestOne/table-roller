@@ -41,16 +41,12 @@ export class TableRollerCore {
 			return;
 		}
 
-		// Store tables with both short name and namespaced name
+		// Store tables with namespaced name only to avoid collisions
 		for (const [name, table] of Object.entries(parsed.tables)) {
-			// Store with short name (for same-file references)
-		this.tables.set(name, { table, namespace, file });
-		
-		// Also store with full namespace (for cross-file references)
-		const fullName = `${namespace}.${name}`;
-		this.tables.set(fullName, { table, namespace, file });
+			const fullName = `${namespace}.${name}`;
+			this.tables.set(fullName, { table, namespace, file });
+		}
 	}
-}
 
 	/**
 	 * Get source file path for a table
@@ -64,11 +60,15 @@ export class TableRollerCore {
 	 * Get list of all available table names
 	 */
 	getTableNames(): string[] {
-		// Return only non-namespaced, non-private names for the picker
+		// Return only non-private table names (format: Namespace.TableName)
 		const names = new Set<string>();
 		for (const [key, data] of this.tables.entries()) {
-			if (!key.includes('.') && !data.table.private) {
-				names.add(key);
+			if (!data.table.private) {
+				// Extract just the table name from "Namespace.TableName"
+				const parts = key.split('.');
+				if (parts.length === 2) {
+					names.add(parts[1]);
+				}
 			}
 		}
 		return Array.from(names).sort();
@@ -221,28 +221,67 @@ export class TableRollerCore {
 	 * - Short name (within same namespace)
 	 * - Full name (Namespace.TableName)
 	 * - Case-insensitive matching
+	 * Throws error if ambiguous matches found across files
 	 */
 	private findTable(searchName: string, contextNamespace?: string): { table: Table, namespace: string, file: TFile } | null {
-		// Try exact match first
-		let tableData = this.tables.get(searchName);
-		if (tableData) return tableData;
-
-		// If there's a context namespace and no dot in search name, try namespaced version
-		if (contextNamespace && !searchName.includes('.')) {
-			const namespacedName = `${contextNamespace}.${searchName}`;
-			tableData = this.tables.get(namespacedName);
+		// If search name contains a dot, it's already namespaced - use exact lookup
+		if (searchName.includes('.')) {
+			const tableData = this.tables.get(searchName);
 			if (tableData) return tableData;
+			
+			// Try case-insensitive for namespaced names
+			const lower = searchName.toLowerCase();
+			for (const [key, data] of this.tables.entries()) {
+				if (key.toLowerCase() === lower) {
+					return data;
+				}
+			}
+			return null;
 		}
 
-		// Try case-insensitive match
-		const lower = searchName.toLowerCase();
-		for (const [key, data] of this.tables.entries()) {
-			if (key.toLowerCase() === lower) {
-				return data;
+		// For short names: prioritize local (same namespace) table
+		if (contextNamespace) {
+			const namespacedName = `${contextNamespace}.${searchName}`;
+			const localTable = this.tables.get(namespacedName);
+			if (localTable) {
+				// Found in local namespace - use it
+				return localTable;
 			}
 		}
 
-		return null;
+		// No local table found - search all tables for matches
+		const matches: Array<{ key: string, data: { table: Table, namespace: string, file: TFile } }> = [];
+		const lower = searchName.toLowerCase();
+
+		for (const [key, data] of this.tables.entries()) {
+			// Extract the table name from the namespaced key (format: "Namespace.TableName")
+			const parts = key.split('.');
+			if (parts.length !== 2) continue; // Skip malformed keys
+			
+			const tableName = parts[1];
+			
+			// Check for case-insensitive match on table name
+			if (tableName.toLowerCase() === lower) {
+				matches.push({ key, data });
+			}
+		}
+
+		// Handle results
+		if (matches.length === 0) {
+			return null;
+		}
+
+		if (matches.length === 1) {
+			// Unambiguous - return the only match
+			return matches[0].data;
+		}
+
+		// Multiple matches - this is ambiguous
+		const fileList = matches.map(m => m.data.namespace).join(', ');
+		throw new Error(
+			`Ambiguous table reference: "${searchName}" exists in multiple files (${fileList}). ` +
+			`Use the format "FileName.${searchName}" to specify which table to use.`
+		);
 	}
 
 	/**

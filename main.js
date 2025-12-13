@@ -330,7 +330,6 @@ var TableRollerCore = class {
       return;
     }
     for (const [name, table] of Object.entries(parsed.tables)) {
-      this.tables.set(name, { table, namespace, file });
       const fullName = `${namespace}.${name}`;
       this.tables.set(fullName, { table, namespace, file });
     }
@@ -348,8 +347,11 @@ var TableRollerCore = class {
   getTableNames() {
     const names = /* @__PURE__ */ new Set();
     for (const [key, data] of this.tables.entries()) {
-      if (!key.includes(".") && !data.table.private) {
-        names.add(key);
+      if (!data.table.private) {
+        const parts = key.split(".");
+        if (parts.length === 2) {
+          names.add(parts[1]);
+        }
       }
     }
     return Array.from(names).sort();
@@ -471,24 +473,49 @@ var TableRollerCore = class {
    * - Short name (within same namespace)
    * - Full name (Namespace.TableName)
    * - Case-insensitive matching
+   * Throws error if ambiguous matches found across files
    */
   findTable(searchName, contextNamespace) {
-    let tableData = this.tables.get(searchName);
-    if (tableData)
-      return tableData;
-    if (contextNamespace && !searchName.includes(".")) {
-      const namespacedName = `${contextNamespace}.${searchName}`;
-      tableData = this.tables.get(namespacedName);
+    if (searchName.includes(".")) {
+      const tableData = this.tables.get(searchName);
       if (tableData)
         return tableData;
+      const lower2 = searchName.toLowerCase();
+      for (const [key, data] of this.tables.entries()) {
+        if (key.toLowerCase() === lower2) {
+          return data;
+        }
+      }
+      return null;
     }
-    const lower = searchName.toLowerCase();
-    for (const [key, data] of this.tables.entries()) {
-      if (key.toLowerCase() === lower) {
-        return data;
+    if (contextNamespace) {
+      const namespacedName = `${contextNamespace}.${searchName}`;
+      const localTable = this.tables.get(namespacedName);
+      if (localTable) {
+        return localTable;
       }
     }
-    return null;
+    const matches = [];
+    const lower = searchName.toLowerCase();
+    for (const [key, data] of this.tables.entries()) {
+      const parts = key.split(".");
+      if (parts.length !== 2)
+        continue;
+      const tableName = parts[1];
+      if (tableName.toLowerCase() === lower) {
+        matches.push({ key, data });
+      }
+    }
+    if (matches.length === 0) {
+      return null;
+    }
+    if (matches.length === 1) {
+      return matches[0].data;
+    }
+    const fileList = matches.map((m) => m.data.namespace).join(", ");
+    throw new Error(
+      `Ambiguous table reference: "${searchName}" exists in multiple files (${fileList}). Use the format "FileName.${searchName}" to specify which table to use.`
+    );
   }
   /**
    * Check if a table is dice-based
@@ -903,6 +930,37 @@ var SaveFileModal = class extends import_obsidian.Modal {
     contentEl.empty();
   }
 };
+var ErrorModal = class extends import_obsidian.Modal {
+  constructor(app, title, message) {
+    super(app);
+    this.title = title;
+    this.message = message;
+  }
+  onOpen() {
+    const { contentEl } = this;
+    contentEl.empty();
+    contentEl.createEl("h2", { text: this.title });
+    const messageContainer = contentEl.createDiv();
+    messageContainer.style.marginTop = "16px";
+    messageContainer.style.marginBottom = "24px";
+    messageContainer.style.lineHeight = "1.6";
+    messageContainer.style.whiteSpace = "pre-wrap";
+    messageContainer.setText(this.message);
+    const buttonContainer = contentEl.createDiv();
+    buttonContainer.style.display = "flex";
+    buttonContainer.style.justifyContent = "center";
+    buttonContainer.style.marginTop = "24px";
+    const closeButton = buttonContainer.createEl("button", { text: "OK" });
+    closeButton.style.padding = "8px 24px";
+    closeButton.addEventListener("click", () => {
+      this.close();
+    });
+  }
+  onClose() {
+    const { contentEl } = this;
+    contentEl.empty();
+  }
+};
 
 // main.ts
 var TableRollerPlugin = class extends import_obsidian2.Plugin {
@@ -939,6 +997,14 @@ var TableRollerPlugin = class extends import_obsidian2.Plugin {
             };
             performRoll();
           } catch (error) {
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            if (errorMessage.includes("Ambiguous table reference")) {
+              new ErrorModal(this.app, "Ambiguous Table Reference", errorMessage).open();
+            } else {
+              new ErrorModal(this.app, "Error", `Failed to roll on table:
+
+${errorMessage}`).open();
+            }
             console.error("Error rolling on table:", error);
           }
         }, this.roller);
