@@ -35,6 +35,7 @@ export class TableBuilderView extends ItemView {
 	private selectedRowIndex: number = 0;
 	private currentFile: TFile | null = null; // Track the file we loaded from
 	private activeContextMenu: HTMLElement | null = null; // Track active context menu
+	private activeMenuCloseListener: ((event: MouseEvent) => void) | null = null; // Track menu close listener
 	
 	// UI elements
 	private leftPanel: HTMLElement;
@@ -91,6 +92,20 @@ export class TableBuilderView extends ItemView {
 	}
 
 	async onClose(): Promise<void> {
+		// Clean up active context menu and event listeners
+		if (this.activeContextMenu && this.activeContextMenu.parentNode) {
+			try {
+				this.activeContextMenu.parentNode.removeChild(this.activeContextMenu);
+			} catch (e) {
+				// Ignore if already removed
+			}
+		}
+		
+		if (this.activeMenuCloseListener) {
+			document.removeEventListener('click', this.activeMenuCloseListener);
+			this.activeMenuCloseListener = null;
+		}
+		
 		if (this.hasUnsavedChanges) {
 			// Show warning - in practice, Obsidian will handle this
 			// We can't actually block close, but we can warn
@@ -1051,9 +1066,21 @@ export class TableBuilderView extends ItemView {
 
 	// Column operations
 	private showColumnContextMenu(e: MouseEvent, colIndex: number): void {
-		// Close any existing menu
-		if (this.activeContextMenu && this.activeContextMenu.parentNode) {
-			this.activeContextMenu.parentNode.removeChild(this.activeContextMenu);
+		// Close any existing menu and remove its event listener
+		if (this.activeMenuCloseListener) {
+			document.removeEventListener('click', this.activeMenuCloseListener);
+			this.activeMenuCloseListener = null;
+		}
+		
+		if (this.activeContextMenu) {
+			try {
+				if (this.activeContextMenu.parentNode) {
+					this.activeContextMenu.parentNode.removeChild(this.activeContextMenu);
+				}
+			} catch (e) {
+				// Menu already removed, ignore
+			}
+			this.activeContextMenu = null;
 		}
 		
 		const menu = document.createElement('div');
@@ -1081,10 +1108,23 @@ export class TableBuilderView extends ItemView {
 			pasteOption.style.background = '';
 		});
 		pasteOption.addEventListener('click', async () => {
-			await this.pasteIntoColumn(colIndex);
-			if (menu.parentNode) {
-				document.body.removeChild(menu);
+			// Remove the close listener first to prevent it from interfering
+			if (this.activeMenuCloseListener) {
+				document.removeEventListener('click', this.activeMenuCloseListener);
+				this.activeMenuCloseListener = null;
 			}
+			
+			await this.pasteIntoColumn(colIndex);
+			
+			// Safely remove the menu
+			if (menu.parentNode && document.body.contains(menu)) {
+				try {
+					menu.parentNode.removeChild(menu);
+				} catch (e) {
+					// Menu already removed, ignore
+				}
+			}
+			
 			this.activeContextMenu = null;
 		});
 		
@@ -1094,14 +1134,36 @@ export class TableBuilderView extends ItemView {
 		// Close menu on click outside
 		const closeMenu = (event: MouseEvent) => {
 			if (!menu.contains(event.target as Node)) {
-				if (menu.parentNode) {
-					document.body.removeChild(menu);
-				}
-				this.activeContextMenu = null;
+				// Remove event listener first to prevent re-entry
 				document.removeEventListener('click', closeMenu);
+				this.activeMenuCloseListener = null;
+				
+				// Cleanup the menu safely - check if it still exists in DOM
+				if (document.body.contains(menu)) {
+					try {
+						document.body.removeChild(menu);
+					} catch (error) {
+						// Ignore if already removed
+					}
+				}
+				
+				// Clear reference
+				if (this.activeContextMenu === menu) {
+					this.activeContextMenu = null;
+				}
 			}
 		};
-		setTimeout(() => document.addEventListener('click', closeMenu), 0);
+		
+		// Track the listener so we can clean it up
+		this.activeMenuCloseListener = closeMenu;
+		
+		// Add the event listener on next tick to avoid immediate trigger
+		setTimeout(() => {
+			// Only add listener if view hasn't been closed
+			if (this.activeContextMenu === menu) {
+				document.addEventListener('click', closeMenu);
+			}
+		}, 0);
 	}
 	
 	private async pasteIntoColumn(colIndex: number): Promise<void> {
@@ -1870,9 +1932,13 @@ export class TableBuilderView extends ItemView {
 			let tableStartIndex = -1;
 			let tableEndIndex = -1;
 			
-			// Find the heading for this table
+			// Find the heading for this table (more robust matching)
 			for (let i = 0; i < lines.length; i++) {
-				if (lines[i].trim() === tableHeading) {
+				const line = lines[i].trim();
+				
+				// Match heading with any number of # symbols
+				const headingMatch = line.match(/^#+\s*(.+)$/);
+				if (headingMatch && headingMatch[1].trim() === tableName.trim()) {
 					tableStartIndex = i;
 					break;
 				}
@@ -1880,19 +1946,27 @@ export class TableBuilderView extends ItemView {
 			
 			if (tableStartIndex !== -1) {
 				// Find the end of this table (next heading or end of file)
+				// We need to include the entire table section including directives and blank lines
+				tableEndIndex = tableStartIndex;
+				
 				for (let i = tableStartIndex + 1; i < lines.length; i++) {
-					if (lines[i].startsWith('# ')) {
-						tableEndIndex = i - 1;
+					const line = lines[i].trim();
+					// Stop if we hit another heading (any number of # symbols)
+					if (line.match(/^#+\s+/)) {
 						break;
 					}
+					// Include this line as part of the table
+					tableEndIndex = i;
 				}
-				if (tableEndIndex === -1) {
-					tableEndIndex = lines.length - 1;
+				
+				// Trim trailing empty lines from the table section
+				while (tableEndIndex > tableStartIndex && lines[tableEndIndex].trim() === '') {
+					tableEndIndex--;
 				}
 				
 				// Extract just the table content (without frontmatter)
 				const markdownLines = markdown.split('\n');
-				const tableContentStart = markdownLines.findIndex(l => l.startsWith('#'));
+				const tableContentStart = markdownLines.findIndex(l => l.match(/^#+\s+/));
 				const newTableContent = markdownLines.slice(tableContentStart).join('\n');
 				
 				// Replace the old table with the new one
@@ -1908,6 +1982,7 @@ export class TableBuilderView extends ItemView {
 				}
 				
 				const newContent = [...before, '', newTableContent, '', ...after].join('\n');
+				
 				await this.app.vault.modify(this.currentFile, newContent);
 				
 				new Notice(`Saved to ${this.currentFile.path}`);

@@ -973,6 +973,8 @@ var TableBuilderView = class extends import_obsidian2.ItemView {
     this.currentFile = null;
     // Track the file we loaded from
     this.activeContextMenu = null;
+    // Track active context menu
+    this.activeMenuCloseListener = null;
     // History for undo/redo
     this.history = [];
     this.historyIndex = -1;
@@ -1006,6 +1008,16 @@ var TableBuilderView = class extends import_obsidian2.ItemView {
     this.applyStyles();
   }
   async onClose() {
+    if (this.activeContextMenu && this.activeContextMenu.parentNode) {
+      try {
+        this.activeContextMenu.parentNode.removeChild(this.activeContextMenu);
+      } catch (e) {
+      }
+    }
+    if (this.activeMenuCloseListener) {
+      document.removeEventListener("click", this.activeMenuCloseListener);
+      this.activeMenuCloseListener = null;
+    }
     if (this.hasUnsavedChanges) {
       console.warn("Closing Table Builder with unsaved changes");
     }
@@ -1203,7 +1215,7 @@ var TableBuilderView = class extends import_obsidian2.ItemView {
       placeholder: "Table1,Table2 or d6 Table1",
       value: this.state.tableReroll || ""
     });
-    rerollInput.title = "Automatically roll on additional tables after rolling this one. Use comma-separated list (Table1,Table2) or dice notation (d6 Table1)";
+    rerollInput.title = "Automatically roll on additional tables after rolling this one. Use comma-separated list (Table1,Table2) or dice notation (d6 Table1), or both";
     rerollInput.addEventListener("input", () => {
       this.captureState();
       this.state.tableReroll = rerollInput.value || void 0;
@@ -1720,8 +1732,18 @@ var TableBuilderView = class extends import_obsidian2.ItemView {
   }
   // Column operations
   showColumnContextMenu(e, colIndex) {
-    if (this.activeContextMenu && this.activeContextMenu.parentNode) {
-      this.activeContextMenu.parentNode.removeChild(this.activeContextMenu);
+    if (this.activeMenuCloseListener) {
+      document.removeEventListener("click", this.activeMenuCloseListener);
+      this.activeMenuCloseListener = null;
+    }
+    if (this.activeContextMenu) {
+      try {
+        if (this.activeContextMenu.parentNode) {
+          this.activeContextMenu.parentNode.removeChild(this.activeContextMenu);
+        }
+      } catch (e2) {
+      }
+      this.activeContextMenu = null;
     }
     const menu = document.createElement("div");
     menu.className = "column-context-menu";
@@ -1747,9 +1769,16 @@ var TableBuilderView = class extends import_obsidian2.ItemView {
       pasteOption.style.background = "";
     });
     pasteOption.addEventListener("click", async () => {
+      if (this.activeMenuCloseListener) {
+        document.removeEventListener("click", this.activeMenuCloseListener);
+        this.activeMenuCloseListener = null;
+      }
       await this.pasteIntoColumn(colIndex);
-      if (menu.parentNode) {
-        document.body.removeChild(menu);
+      if (menu.parentNode && document.body.contains(menu)) {
+        try {
+          menu.parentNode.removeChild(menu);
+        } catch (e2) {
+        }
       }
       this.activeContextMenu = null;
     });
@@ -1757,14 +1786,25 @@ var TableBuilderView = class extends import_obsidian2.ItemView {
     this.activeContextMenu = menu;
     const closeMenu = (event) => {
       if (!menu.contains(event.target)) {
-        if (menu.parentNode) {
-          document.body.removeChild(menu);
-        }
-        this.activeContextMenu = null;
         document.removeEventListener("click", closeMenu);
+        this.activeMenuCloseListener = null;
+        if (document.body.contains(menu)) {
+          try {
+            document.body.removeChild(menu);
+          } catch (error) {
+          }
+        }
+        if (this.activeContextMenu === menu) {
+          this.activeContextMenu = null;
+        }
       }
     };
-    setTimeout(() => document.addEventListener("click", closeMenu), 0);
+    this.activeMenuCloseListener = closeMenu;
+    setTimeout(() => {
+      if (this.activeContextMenu === menu) {
+        document.addEventListener("click", closeMenu);
+      }
+    }, 0);
   }
   async pasteIntoColumn(colIndex) {
     try {
@@ -2347,23 +2387,27 @@ var TableBuilderView = class extends import_obsidian2.ItemView {
       let tableStartIndex = -1;
       let tableEndIndex = -1;
       for (let i = 0; i < lines.length; i++) {
-        if (lines[i].trim() === tableHeading) {
+        const line = lines[i].trim();
+        const headingMatch = line.match(/^#+\s*(.+)$/);
+        if (headingMatch && headingMatch[1].trim() === tableName.trim()) {
           tableStartIndex = i;
           break;
         }
       }
       if (tableStartIndex !== -1) {
+        tableEndIndex = tableStartIndex;
         for (let i = tableStartIndex + 1; i < lines.length; i++) {
-          if (lines[i].startsWith("# ")) {
-            tableEndIndex = i - 1;
+          const line = lines[i].trim();
+          if (line.match(/^#+\s+/)) {
             break;
           }
+          tableEndIndex = i;
         }
-        if (tableEndIndex === -1) {
-          tableEndIndex = lines.length - 1;
+        while (tableEndIndex > tableStartIndex && lines[tableEndIndex].trim() === "") {
+          tableEndIndex--;
         }
         const markdownLines = markdown.split("\n");
-        const tableContentStart = markdownLines.findIndex((l) => l.startsWith("#"));
+        const tableContentStart = markdownLines.findIndex((l) => l.match(/^#+\s+/));
         const newTableContent = markdownLines.slice(tableContentStart).join("\n");
         const before = lines.slice(0, tableStartIndex);
         const after = lines.slice(tableEndIndex + 1);
