@@ -172,21 +172,43 @@ export class TableRollerCore {
 
 	/**
 	 * Resolve reroll references (comma-delimited table names)
+	 * Supports multi-roll syntax: d6 TableName, 1d6 TableName, 2d8 TableName, etc.
 	 */
 	private resolveRerolls(rerollString: string, contextNamespace: string, modifier: number = 0): RollResult[] {
 		const tableNames = rerollString.split(',').map(t => t.trim()).filter(t => t);
 		const results: RollResult[] = [];
 
 		for (const name of tableNames) {
-			const tableData = this.findTable(name, contextNamespace);
+			// Check for multi-roll syntax: dice notation followed by table name
+			// Matches: d6 TableName, 1d6 TableName, 2d8 TableName, etc.
+			const multiRollMatch = name.match(/^(\d*d\d+)\s+(.+)$/i);
+			
+			let rollCount = 1;
+			let actualTableName = name;
+			
+			if (multiRollMatch) {
+				// Roll the dice to determine how many times to roll on the table
+				try {
+					rollCount = DiceRoller.roll(multiRollMatch[1]);
+					actualTableName = multiRollMatch[2].trim();
+				} catch (error) {
+					console.warn(`Invalid dice notation in reroll: ${multiRollMatch[1]}`, error);
+					continue;
+				}
+			}
+			
+			const tableData = this.findTable(actualTableName, contextNamespace);
 			if (tableData) {
 				try {
-					results.push(this.rollOnTable(name, tableData.table, tableData.namespace, tableData.file.path, modifier));
+					// Roll on the table multiple times if needed
+					for (let i = 0; i < rollCount; i++) {
+						results.push(this.rollOnTable(actualTableName, tableData.table, tableData.namespace, tableData.file.path, modifier));
+					}
 				} catch (error) {
-					console.warn(`Failed to roll on ${name}:`, error);
+					console.warn(`Failed to roll on ${actualTableName}:`, error);
 				}
 			} else {
-				console.warn(`Table not found for reroll: ${name}`);
+				console.warn(`Table not found for reroll: ${actualTableName}`);
 			}
 		}
 

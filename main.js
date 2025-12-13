@@ -432,20 +432,35 @@ var TableRollerCore = class {
   }
   /**
    * Resolve reroll references (comma-delimited table names)
+   * Supports multi-roll syntax: d6 TableName, 1d6 TableName, 2d8 TableName, etc.
    */
   resolveRerolls(rerollString, contextNamespace, modifier = 0) {
     const tableNames = rerollString.split(",").map((t) => t.trim()).filter((t) => t);
     const results = [];
     for (const name of tableNames) {
-      const tableData = this.findTable(name, contextNamespace);
+      const multiRollMatch = name.match(/^(\d*d\d+)\s+(.+)$/i);
+      let rollCount = 1;
+      let actualTableName = name;
+      if (multiRollMatch) {
+        try {
+          rollCount = DiceRoller.roll(multiRollMatch[1]);
+          actualTableName = multiRollMatch[2].trim();
+        } catch (error) {
+          console.warn(`Invalid dice notation in reroll: ${multiRollMatch[1]}`, error);
+          continue;
+        }
+      }
+      const tableData = this.findTable(actualTableName, contextNamespace);
       if (tableData) {
         try {
-          results.push(this.rollOnTable(name, tableData.table, tableData.namespace, tableData.file.path, modifier));
+          for (let i = 0; i < rollCount; i++) {
+            results.push(this.rollOnTable(actualTableName, tableData.table, tableData.namespace, tableData.file.path, modifier));
+          }
         } catch (error) {
-          console.warn(`Failed to roll on ${name}:`, error);
+          console.warn(`Failed to roll on ${actualTableName}:`, error);
         }
       } else {
-        console.warn(`Table not found for reroll: ${name}`);
+        console.warn(`Table not found for reroll: ${actualTableName}`);
       }
     }
     return results;
