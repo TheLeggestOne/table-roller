@@ -1,6 +1,6 @@
 {
   "name": "table-roller",
-  "version": "1.1.2",
+  "version": "1.1.3",
   "description": "Obsidian plugin for rolling on random tables",
   "main": "main.js",
   "scripts": {
