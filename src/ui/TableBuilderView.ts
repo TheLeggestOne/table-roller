@@ -1861,12 +1861,13 @@ export class TableBuilderView extends ItemView {
 				return;
 			}
 			
-			if (tableNames.length === 1) {
-				// Load the only table
+			// If there's only one table and its name matches the file basename, load it
+			// Otherwise, always show the picker so user can see what's available
+			if (tableNames.length === 1 && tableNames[0] === file.basename) {
 				await this.loadParsedTable(tableNames[0], parsed.tables[tableNames[0]], parsed);
 			} else {
-				// Show table picker
-				this.showTablePicker(tableNames, parsed);
+				// Show table picker (even for single tables if name doesn't match file)
+				this.showTablePicker(tableNames, parsed, file);
 			}
 		} catch (error) {
 			console.error('Error loading table:', error);
@@ -1874,29 +1875,58 @@ export class TableBuilderView extends ItemView {
 		}
 	}
 
-	private showTablePicker(tableNames: string[], parsed: any): void {
+	private showTablePicker(tableNames: string[], parsed: any, file: TFile): void {
 		const modal = new Modal(this.app);
-		modal.titleEl.setText('Select Table');
+		modal.titleEl.setText(`Select Table from ${file.basename}`);
+		
+		modal.contentEl.createEl('p', { 
+			text: `This file contains ${tableNames.length} table${tableNames.length > 1 ? 's' : ''}:`,
+			cls: 'table-picker-hint'
+		});
 		
 		const tableList = modal.contentEl.createDiv({ cls: 'table-list' });
+		tableList.style.maxHeight = '500px';
+		tableList.style.overflowY = 'auto';
+		tableList.style.minWidth = '400px';
 		
 		tableNames.forEach(name => {
+			const table = parsed.tables[name];
+			const isDiceTable = 'dice' in table;
+			const entryCount = isDiceTable ? table.entries.length : table.rows.length;
+			const tableType = isDiceTable ? `Dice (${table.dice})` : 'Simple';
+			
 			const btn = tableList.createEl('button', { 
-				text: name,
 				cls: 'table-option'
 			});
 			btn.style.display = 'block';
 			btn.style.width = '100%';
 			btn.style.textAlign = 'left';
-			btn.style.padding = '8px';
-			btn.style.marginBottom = '4px';
+			btn.style.padding = '12px';
+			btn.style.marginBottom = '8px';
 			btn.style.border = '1px solid var(--background-modifier-border)';
 			btn.style.background = 'var(--background-secondary)';
 			btn.style.cursor = 'pointer';
+			btn.style.minHeight = '60px';
+			
+			const nameEl = btn.createEl('div', { text: name });
+			nameEl.style.fontWeight = 'bold';
+			nameEl.style.marginBottom = '4px';
+			nameEl.style.overflow = 'hidden';
+			nameEl.style.textOverflow = 'ellipsis';
+			nameEl.style.whiteSpace = 'normal';
+			nameEl.style.wordBreak = 'break-word';
+			nameEl.style.marginBottom = '4px';
+			
+			const infoEl = btn.createEl('div', { 
+				text: `${tableType} • ${entryCount} rows`,
+				cls: 'table-info'
+			});
+			infoEl.style.fontSize = '0.9em';
+			infoEl.style.opacity = '0.7';
 			
 			btn.addEventListener('click', async () => {
 				modal.close();
-				await this.loadParsedTable(name, parsed.tables[name], parsed);
+				await this.loadParsedTable(name, table, parsed);
 			});
 			
 			btn.addEventListener('mouseenter', () => {
@@ -1928,6 +1958,9 @@ export class TableBuilderView extends ItemView {
 				diceNotation: table.dice
 			});
 			
+			// Check if any entry has a reroll directive
+			const hasRerollColumn = table.entries.some((e: any) => e.reroll);
+			
 			// Get other columns from first entry
 			if (table.entries.length > 0) {
 				const firstEntry = table.entries[0];
@@ -1944,10 +1977,27 @@ export class TableBuilderView extends ItemView {
 				}
 			}
 			
+			// Add reroll column if needed and not already in columns
+			if (hasRerollColumn && !columns.some(c => c.type === 'reroll')) {
+				const rerollColId = this.generateColumnId();
+				columns.push({ id: rerollColId, name: 'Reroll', type: 'reroll' });
+				nameToIdMap.set('reroll', rerollColId);
+			}
+			
 			// Convert entries to rows, migrating keys from names to IDs
 			for (const entry of table.entries) {
+				// Preserve "X+" notation when max is 999
+				let rangeStr: string;
+				if (entry.max === 999 && entry.min > 1) {
+					rangeStr = `${entry.min}+`;
+				} else if (entry.min === entry.max) {
+					rangeStr = `${entry.min}`;
+				} else {
+					rangeStr = `${entry.min}-${entry.max}`;
+				}
+				
 				const row: RowData = {
-					range: entry.min === entry.max ? `${entry.min}` : `${entry.min}-${entry.max}`
+					range: rangeStr
 				};
 				
 				if (entry.columns) {
@@ -1958,7 +2008,8 @@ export class TableBuilderView extends ItemView {
 				}
 				
 				if (entry.reroll) {
-					row.reroll = entry.reroll;
+					const rerollColId = nameToIdMap.get('reroll') || 'reroll';
+					row[rerollColId] = entry.reroll;
 				}
 				
 				rows.push(row);
@@ -2223,10 +2274,11 @@ export class TableBuilderView extends ItemView {
 							errors.push(`Dice ranges should start at 1 (found: ${sortedRanges[0].min})`);
 						}
 						
-						// Check if we end at the max dice value
+						// Check if we end at or above the max dice value
+						// Allow higher values to account for modifiers and "X+" notation
 						const lastRange = sortedRanges[sortedRanges.length - 1];
-						if (lastRange.max !== sides) {
-							errors.push(`Dice ranges should end at ${sides} for ${diceCol.diceNotation} (found: ${lastRange.max})`);
+						if (lastRange.max < sides) {
+							errors.push(`Dice ranges should cover up to ${sides} for ${diceCol.diceNotation} (highest range ends at: ${lastRange.max})`);
 						}
 						
 						// Check for gaps (only if no overlaps detected, since overlaps will cause false gap warnings)

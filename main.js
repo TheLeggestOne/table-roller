@@ -2301,36 +2301,61 @@ var TableBuilderView = class extends import_obsidian2.ItemView {
         new import_obsidian2.Notice("No tables found in file");
         return;
       }
-      if (tableNames.length === 1) {
+      if (tableNames.length === 1 && tableNames[0] === file.basename) {
         await this.loadParsedTable(tableNames[0], parsed.tables[tableNames[0]], parsed);
       } else {
-        this.showTablePicker(tableNames, parsed);
+        this.showTablePicker(tableNames, parsed, file);
       }
     } catch (error) {
       console.error("Error loading table:", error);
       new import_obsidian2.Notice("Failed to load table");
     }
   }
-  showTablePicker(tableNames, parsed) {
+  showTablePicker(tableNames, parsed, file) {
     const modal = new import_obsidian2.Modal(this.app);
-    modal.titleEl.setText("Select Table");
+    modal.titleEl.setText(`Select Table from ${file.basename}`);
+    modal.contentEl.createEl("p", {
+      text: `This file contains ${tableNames.length} table${tableNames.length > 1 ? "s" : ""}:`,
+      cls: "table-picker-hint"
+    });
     const tableList = modal.contentEl.createDiv({ cls: "table-list" });
+    tableList.style.maxHeight = "500px";
+    tableList.style.overflowY = "auto";
+    tableList.style.minWidth = "400px";
     tableNames.forEach((name) => {
+      const table = parsed.tables[name];
+      const isDiceTable = "dice" in table;
+      const entryCount = isDiceTable ? table.entries.length : table.rows.length;
+      const tableType = isDiceTable ? `Dice (${table.dice})` : "Simple";
       const btn = tableList.createEl("button", {
-        text: name,
         cls: "table-option"
       });
       btn.style.display = "block";
       btn.style.width = "100%";
       btn.style.textAlign = "left";
-      btn.style.padding = "8px";
-      btn.style.marginBottom = "4px";
+      btn.style.padding = "12px";
+      btn.style.marginBottom = "8px";
       btn.style.border = "1px solid var(--background-modifier-border)";
       btn.style.background = "var(--background-secondary)";
       btn.style.cursor = "pointer";
+      btn.style.minHeight = "60px";
+      const nameEl = btn.createEl("div", { text: name });
+      nameEl.style.fontWeight = "bold";
+      nameEl.style.marginBottom = "4px";
+      nameEl.style.overflow = "hidden";
+      nameEl.style.textOverflow = "ellipsis";
+      nameEl.style.whiteSpace = "normal";
+      nameEl.style.wordBreak = "break-word";
+      nameEl.style.marginBottom = "4px";
+      const infoEl = btn.createEl("div", {
+        text: `${tableType} \u2022 ${entryCount} rows`,
+        cls: "table-info"
+      });
+      infoEl.style.fontSize = "0.9em";
+      infoEl.style.opacity = "0.7";
       btn.addEventListener("click", async () => {
         modal.close();
-        await this.loadParsedTable(name, parsed.tables[name], parsed);
+        await this.loadParsedTable(name, table, parsed);
       });
       btn.addEventListener("mouseenter", () => {
         btn.style.background = "var(--background-modifier-hover)";
@@ -2353,6 +2378,7 @@ var TableBuilderView = class extends import_obsidian2.ItemView {
         type: "dice",
         diceNotation: table.dice
       });
+      const hasRerollColumn = table.entries.some((e) => e.reroll);
       if (table.entries.length > 0) {
         const firstEntry = table.entries[0];
         if (firstEntry.columns) {
@@ -2367,9 +2393,22 @@ var TableBuilderView = class extends import_obsidian2.ItemView {
           }
         }
       }
+      if (hasRerollColumn && !columns.some((c) => c.type === "reroll")) {
+        const rerollColId = this.generateColumnId();
+        columns.push({ id: rerollColId, name: "Reroll", type: "reroll" });
+        nameToIdMap.set("reroll", rerollColId);
+      }
       for (const entry of table.entries) {
+        let rangeStr;
+        if (entry.max === 999 && entry.min > 1) {
+          rangeStr = `${entry.min}+`;
+        } else if (entry.min === entry.max) {
+          rangeStr = `${entry.min}`;
+        } else {
+          rangeStr = `${entry.min}-${entry.max}`;
+        }
         const row = {
-          range: entry.min === entry.max ? `${entry.min}` : `${entry.min}-${entry.max}`
+          range: rangeStr
         };
         if (entry.columns) {
           for (const [key, value] of Object.entries(entry.columns)) {
@@ -2378,7 +2417,8 @@ var TableBuilderView = class extends import_obsidian2.ItemView {
           }
         }
         if (entry.reroll) {
-          row.reroll = entry.reroll;
+          const rerollColId = nameToIdMap.get("reroll") || "reroll";
+          row[rerollColId] = entry.reroll;
         }
         rows.push(row);
       }
@@ -2572,8 +2612,8 @@ var TableBuilderView = class extends import_obsidian2.ItemView {
               errors.push(`Dice ranges should start at 1 (found: ${sortedRanges[0].min})`);
             }
             const lastRange = sortedRanges[sortedRanges.length - 1];
-            if (lastRange.max !== sides) {
-              errors.push(`Dice ranges should end at ${sides} for ${diceCol.diceNotation} (found: ${lastRange.max})`);
+            if (lastRange.max < sides) {
+              errors.push(`Dice ranges should cover up to ${sides} for ${diceCol.diceNotation} (highest range ends at: ${lastRange.max})`);
             }
             const hasOverlaps = ranges.some(
               (r1, i) => ranges.some((r2, j) => i !== j && r1.min <= r2.max && r2.min <= r1.max)
