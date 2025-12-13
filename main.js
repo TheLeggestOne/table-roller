@@ -27,7 +27,7 @@ __export(main_exports, {
   default: () => TableRollerPlugin
 });
 module.exports = __toCommonJS(main_exports);
-var import_obsidian6 = require("obsidian");
+var import_obsidian3 = require("obsidian");
 
 // src/services/TableParser.ts
 var TableParser = class {
@@ -860,140 +860,493 @@ var ErrorModal = class extends import_obsidian.Modal {
 };
 
 // src/ui/TableBuilderView.ts
-var import_obsidian5 = require("obsidian");
-
-// src/ui/utils/TableBuilderUtils.ts
-function generateDefaultRows(diceNotation, count, groupSize, remainder) {
-  const rows = [];
-  const match = diceNotation.match(/^(\d*)d(\d+)$/i);
-  if (!match)
-    return rows;
-  const numDice = match[1] ? parseInt(match[1]) : 1;
-  const sides = parseInt(match[2]);
-  const minValue = numDice;
-  const maxValue = numDice * sides;
-  const totalRange = maxValue - minValue + 1;
-  if (groupSize && groupSize >= 2) {
-    const extraValues = totalRange % groupSize;
-    let currentValue = minValue;
-    const remainderStrategy = remainder || "expand-last";
-    if (remainderStrategy === "row-first" && extraValues > 0) {
-      const end = minValue + extraValues - 1;
-      if (minValue === end) {
-        rows.push({ range: `${minValue}` });
-      } else {
-        rows.push({ range: `${minValue}-${end}` });
-      }
-      currentValue = end + 1;
-    }
-    const mainRowCount = Math.floor(totalRange / groupSize);
-    for (let i = 0; i < mainRowCount; i++) {
-      let rangeSize = groupSize;
-      if (extraValues > 0) {
-        if (remainderStrategy === "expand-first" && i === 0) {
-          rangeSize = groupSize + extraValues;
-        } else if (remainderStrategy === "expand-last" && i === mainRowCount - 1) {
-          rangeSize = groupSize + extraValues;
-        }
-      }
-      const start = currentValue;
-      const end = Math.min(currentValue + rangeSize - 1, maxValue);
-      if (start === end) {
-        rows.push({ range: `${start}` });
-      } else {
-        rows.push({ range: `${start}-${end}` });
-      }
-      currentValue = end + 1;
-    }
-    if (remainderStrategy === "row-last" && extraValues > 0 && currentValue <= maxValue) {
-      if (currentValue === maxValue) {
-        rows.push({ range: `${maxValue}` });
-      } else {
-        rows.push({ range: `${currentValue}-${maxValue}` });
-      }
-    }
-  } else if (count < totalRange) {
-    const calculatedGroupSize = Math.floor(totalRange / count);
-    const extraValues = totalRange % count;
-    let currentValue = minValue;
-    for (let i = 0; i < count; i++) {
-      let rangeSize = calculatedGroupSize;
-      if (i === count - 1 && extraValues > 0) {
-        rangeSize = calculatedGroupSize + extraValues;
-      }
-      const start = currentValue;
-      const end = Math.min(currentValue + rangeSize - 1, maxValue);
-      if (start === end) {
-        rows.push({ range: `${start}` });
-      } else {
-        rows.push({ range: `${start}-${end}` });
-      }
-      currentValue = end + 1;
-    }
-  } else {
-    for (let i = minValue; i <= Math.min(maxValue, minValue + count - 1); i++) {
-      rows.push({ range: `${i}` });
-    }
-  }
-  return rows;
-}
-function generateMarkdown(state) {
-  const lines = [];
-  lines.push("---");
-  lines.push("table-roller: true");
-  lines.push("---");
-  lines.push("");
-  lines.push(`# ${state.tableName}`);
-  lines.push("");
-  if (state.isPrivate) {
-    lines.push("private: true");
-  }
-  if (state.tableReroll) {
-    lines.push(`reroll: ${state.tableReroll}`);
-  }
-  if (state.isPrivate || state.tableReroll) {
-    lines.push("");
-  }
-  const headers = state.columns.map((col) => col.name);
-  lines.push("| " + headers.join(" | ") + " |");
-  lines.push("|" + headers.map(() => "----").join("|") + "|");
-  state.rows.forEach((row) => {
-    const cells = state.columns.map((col) => {
-      const key = col.type === "dice" ? "range" : col.name;
-      return row[key] || "";
-    });
-    lines.push("| " + cells.join(" | ") + " |");
-  });
-  return lines.join("\n");
-}
-function deepClone(obj) {
-  return JSON.parse(JSON.stringify(obj));
-}
-
-// src/ui/state/TableBuilderState.ts
-var StateManager = class extends EventTarget {
-  /**
-   * Creates a new StateManager with the given initial state
-   * @param initialState - The initial table state
-   */
-  constructor(initialState) {
-    super();
+var import_obsidian2 = require("obsidian");
+var VIEW_TYPE_TABLE_BUILDER = "table-builder";
+var TableBuilderView = class extends import_obsidian2.ItemView {
+  constructor(leaf, roller) {
+    super(leaf);
+    this.hasUnsavedChanges = false;
+    this.selectedRowIndex = 0;
+    this.currentFile = null;
+    // Track the file we loaded from
+    this.activeContextMenu = null;
+    // Track active context menu
+    this.activeMenuCloseListener = null;
+    // History for undo/redo
     this.history = [];
     this.historyIndex = -1;
     this.MAX_HISTORY = 50;
-    this.currentState = deepClone(initialState);
-    this.captureState();
+    // Debounce timer for preview updates
+    this.previewUpdateTimer = null;
+    // Drag and drop for columns
+    this.draggedColumnIndex = -1;
+    this.roller = roller;
+    this.state = this.getDefaultState();
   }
-  /**
-   * Captures the current state to the history stack
-   * Removes any forward history if we're not at the end
-   * Maintains history size limit
-   */
+  getViewType() {
+    return VIEW_TYPE_TABLE_BUILDER;
+  }
+  getDisplayText() {
+    const asterisk = this.hasUnsavedChanges ? "*" : "";
+    return `Table Builder${asterisk}`;
+  }
+  getIcon() {
+    return "table";
+  }
+  async onOpen() {
+    const container = this.containerEl.children[1];
+    container.empty();
+    container.addClass("table-builder-view");
+    const splitContainer = container.createDiv({ cls: "table-builder-split" });
+    this.leftPanel = splitContainer.createDiv({ cls: "table-builder-left-panel" });
+    this.rightPanel = splitContainer.createDiv({ cls: "table-builder-right-panel" });
+    this.buildLeftPanel();
+    this.buildRightPanel();
+    this.applyStyles();
+  }
+  async onClose() {
+    if (this.activeContextMenu && this.activeContextMenu.parentNode) {
+      try {
+        this.activeContextMenu.parentNode.removeChild(this.activeContextMenu);
+      } catch (e) {
+      }
+    }
+    if (this.activeMenuCloseListener) {
+      document.removeEventListener("click", this.activeMenuCloseListener);
+      this.activeMenuCloseListener = null;
+    }
+    if (this.hasUnsavedChanges) {
+      console.warn("Closing Table Builder with unsaved changes");
+    }
+  }
+  getDefaultState() {
+    return {
+      tableName: "New Table",
+      columns: [
+        { name: "d6", type: "dice", diceNotation: "d6" },
+        { name: "Result", type: "regular" }
+      ],
+      rows: this.generateDefaultRows("d6", 6),
+      isPrivate: false
+    };
+  }
+  generateDefaultRows(diceNotation, count, groupSize, remainder) {
+    const rows = [];
+    const match = diceNotation.match(/^(\d*)d(\d+)$/i);
+    if (!match)
+      return rows;
+    const numDice = match[1] ? parseInt(match[1]) : 1;
+    const sides = parseInt(match[2]);
+    const minValue = numDice;
+    const maxValue = numDice * sides;
+    const totalRange = maxValue - minValue + 1;
+    if (groupSize && groupSize >= 2) {
+      const extraValues = totalRange % groupSize;
+      let currentValue = minValue;
+      const remainderStrategy = remainder || "expand-last";
+      if (remainderStrategy === "row-first" && extraValues > 0) {
+        const end = minValue + extraValues - 1;
+        if (minValue === end) {
+          rows.push({ range: `${minValue}` });
+        } else {
+          rows.push({ range: `${minValue}-${end}` });
+        }
+        currentValue = end + 1;
+      }
+      const mainRowCount = Math.floor(totalRange / groupSize);
+      for (let i = 0; i < mainRowCount; i++) {
+        let rangeSize = groupSize;
+        if (extraValues > 0) {
+          if (remainderStrategy === "expand-first" && i === 0) {
+            rangeSize = groupSize + extraValues;
+          } else if (remainderStrategy === "expand-last" && i === mainRowCount - 1) {
+            rangeSize = groupSize + extraValues;
+          }
+        }
+        const start = currentValue;
+        const end = Math.min(currentValue + rangeSize - 1, maxValue);
+        if (start === end) {
+          rows.push({ range: `${start}` });
+        } else {
+          rows.push({ range: `${start}-${end}` });
+        }
+        currentValue = end + 1;
+      }
+      if (remainderStrategy === "row-last" && extraValues > 0 && currentValue <= maxValue) {
+        if (currentValue === maxValue) {
+          rows.push({ range: `${maxValue}` });
+        } else {
+          rows.push({ range: `${currentValue}-${maxValue}` });
+        }
+      }
+    } else if (count < totalRange) {
+      const calculatedGroupSize = Math.floor(totalRange / count);
+      const extraValues = totalRange % count;
+      let currentValue = minValue;
+      for (let i = 0; i < count; i++) {
+        let rangeSize = calculatedGroupSize;
+        if (i === count - 1 && extraValues > 0) {
+          rangeSize = calculatedGroupSize + extraValues;
+        }
+        const start = currentValue;
+        const end = Math.min(currentValue + rangeSize - 1, maxValue);
+        if (start === end) {
+          rows.push({ range: `${start}` });
+        } else {
+          rows.push({ range: `${start}-${end}` });
+        }
+        currentValue = end + 1;
+      }
+    } else {
+      for (let i = minValue; i <= Math.min(maxValue, minValue + count - 1); i++) {
+        rows.push({ range: `${i}` });
+      }
+    }
+    return rows;
+  }
+  buildLeftPanel() {
+    const toolbar = this.leftPanel.createDiv({ cls: "table-builder-toolbar" });
+    const undoButton = toolbar.createEl("button", { text: "Undo", cls: "table-builder-btn" });
+    undoButton.addEventListener("click", () => this.undo());
+    const redoButton = toolbar.createEl("button", { text: "Redo", cls: "table-builder-btn" });
+    redoButton.addEventListener("click", () => this.redo());
+    const clearResultsBtn = toolbar.createEl("button", { text: "Clear Results", cls: "table-builder-btn" });
+    clearResultsBtn.addEventListener("click", () => this.clearResults());
+    const deleteAllBtn = toolbar.createEl("button", { text: "Delete All Rows", cls: "table-builder-btn" });
+    deleteAllBtn.addEventListener("click", () => this.deleteAllRows());
+    const nameSection = this.leftPanel.createDiv({ cls: "table-builder-section" });
+    nameSection.createEl("label", { text: "Table Name:" });
+    this.tableNameInput = nameSection.createEl("input", { type: "text", value: this.state.tableName });
+    this.tableNameInput.addEventListener("input", () => {
+      this.captureState();
+      this.state.tableName = this.tableNameInput.value;
+      this.markUnsaved();
+      this.schedulePreviewUpdate();
+    });
+    const columnsSection = this.leftPanel.createDiv({ cls: "table-builder-section" });
+    columnsSection.createEl("h3", { text: "Columns" });
+    this.buildColumnsEditor(columnsSection);
+    const directivesSection = this.leftPanel.createDiv({ cls: "table-builder-section" });
+    directivesSection.createEl("h3", { text: "Directives" });
+    this.buildDirectivesEditor(directivesSection);
+    const rowsSection = this.leftPanel.createDiv({ cls: "table-builder-section" });
+    rowsSection.createEl("h3", { text: "Rows" });
+    this.rowGrid = rowsSection.createDiv({ cls: "table-builder-row-grid" });
+    this.buildRowGrid();
+    const addRowBtn = rowsSection.createEl("button", { text: "+ Add Row", cls: "table-builder-btn" });
+    addRowBtn.addEventListener("click", () => this.addRow());
+    this.buildExamplesSidebar(this.leftPanel);
+  }
+  buildColumnsEditor(container) {
+    const columnsList = container.createDiv({ cls: "columns-list" });
+    this.state.columns.forEach((col, index) => {
+      const colItem = columnsList.createDiv({ cls: "column-item" });
+      const dragHandle = colItem.createDiv({ cls: "drag-handle", text: "\u22EE\u22EE" });
+      dragHandle.draggable = true;
+      dragHandle.addEventListener("dragstart", (e) => this.onColumnDragStart(e, index));
+      dragHandle.addEventListener("dragover", (e) => this.onColumnDragOver(e));
+      dragHandle.addEventListener("drop", (e) => this.onColumnDrop(e, index));
+      const nameInput = colItem.createEl("input", {
+        type: "text",
+        value: col.name,
+        placeholder: "Column name"
+      });
+      if (col.type === "reroll") {
+        nameInput.disabled = true;
+        nameInput.style.opacity = "0.6";
+        nameInput.style.cursor = "not-allowed";
+      }
+      nameInput.addEventListener("input", () => {
+        this.captureState();
+        col.name = nameInput.value;
+        if (col.type === "dice") {
+          col.diceNotation = nameInput.value;
+          this.buildRowGrid();
+        }
+        this.markUnsaved();
+        this.schedulePreviewUpdate();
+      });
+      const typeLabel = colItem.createSpan({ text: `(${col.type})`, cls: "column-type" });
+      if (col.type === "dice" && col.diceNotation) {
+        const generateBtn = colItem.createEl("button", { text: "Generate Rows...", cls: "table-builder-btn-small" });
+        generateBtn.style.marginLeft = "8px";
+        generateBtn.addEventListener("click", () => this.showGenerateRowsModal(col.diceNotation));
+      }
+      if (this.state.columns.length > 1) {
+        const deleteBtn = colItem.createEl("button", { text: "\xD7", cls: "delete-btn" });
+        deleteBtn.addEventListener("click", () => this.deleteColumn(index));
+      }
+    });
+    const addBtns = container.createDiv({ cls: "add-column-btns" });
+    const hasDiceColumn = this.state.columns.some((c) => c.type === "dice");
+    if (!hasDiceColumn) {
+      const addDiceBtn = addBtns.createEl("button", { text: "+ Dice Column", cls: "table-builder-btn" });
+      addDiceBtn.addEventListener("click", () => this.addDiceColumn());
+    }
+    const addRegularBtn = addBtns.createEl("button", { text: "+ Regular Column", cls: "table-builder-btn" });
+    addRegularBtn.addEventListener("click", () => this.addColumn("regular"));
+    const hasRerollColumn = this.state.columns.some((c) => c.type === "reroll");
+    if (!hasRerollColumn) {
+      const addRerollBtn = addBtns.createEl("button", { text: "+ Reroll Column", cls: "table-builder-btn" });
+      addRerollBtn.addEventListener("click", () => this.addColumn("reroll"));
+    }
+  }
+  buildDirectivesEditor(container) {
+    const privateDiv = container.createDiv({ cls: "directive-item" });
+    privateDiv.title = "When enabled, this table will not appear in the table picker dropdown when rolling from other tables";
+    const privateLabel = privateDiv.createEl("label");
+    const privateCheckbox = privateLabel.createEl("input", { type: "checkbox" });
+    privateCheckbox.checked = this.state.isPrivate;
+    privateLabel.appendText(" Private ");
+    privateCheckbox.addEventListener("change", () => {
+      this.captureState();
+      this.state.isPrivate = privateCheckbox.checked;
+      this.markUnsaved();
+      this.schedulePreviewUpdate();
+    });
+    const rerollDiv = container.createDiv({ cls: "directive-item" });
+    const rerollLabel = rerollDiv.createEl("label", { text: "Table-level Reroll:" });
+    rerollLabel.title = "Automatically roll on additional tables after rolling this one. Use comma-separated list (Table1,Table2) or dice notation (d6 Table1), or both";
+    const rerollInput = rerollDiv.createEl("input", {
+      type: "text",
+      placeholder: "Table1,Table2 or d6 Table1",
+      value: this.state.tableReroll || ""
+    });
+    rerollInput.title = "Automatically roll on additional tables after rolling this one. Use comma-separated list (Table1,Table2) or dice notation (d6 Table1), or both";
+    rerollInput.addEventListener("input", () => {
+      this.captureState();
+      this.state.tableReroll = rerollInput.value || void 0;
+      this.markUnsaved();
+      this.schedulePreviewUpdate();
+    });
+    rerollInput.addEventListener("blur", () => {
+      if (this.state.tableReroll) {
+        this.validateRerollReference(this.state.tableReroll);
+      }
+    });
+  }
+  buildRowGrid() {
+    this.rowGrid.empty();
+    const headerRow = this.rowGrid.createDiv({ cls: "row-grid-header" });
+    headerRow.createDiv({ text: "", cls: "row-number" });
+    this.state.columns.forEach((col, colIndex) => {
+      const headerCell = headerRow.createDiv({ text: col.name, cls: "grid-cell" });
+      headerCell.addEventListener("contextmenu", (e) => {
+        e.preventDefault();
+        this.showColumnContextMenu(e, colIndex);
+      });
+      headerCell.style.cursor = "context-menu";
+    });
+    this.state.rows.forEach((row, rowIndex) => {
+      const rowEl = this.rowGrid.createDiv({ cls: "row-grid-row" });
+      if (rowIndex === this.selectedRowIndex) {
+        rowEl.addClass("selected");
+      }
+      const rowNum = rowEl.createDiv({ text: `${rowIndex + 1}`, cls: "row-number" });
+      rowNum.addEventListener("click", () => {
+        this.selectedRowIndex = rowIndex;
+        this.updateRowSelection();
+      });
+      this.state.columns.forEach((col, colIndex) => {
+        const cellKey = col.type === "dice" ? "range" : col.name;
+        const cellValue = row[cellKey] || "";
+        const cell = rowEl.createDiv({ cls: "grid-cell" });
+        const input = cell.createEl("input", {
+          type: "text",
+          value: cellValue,
+          placeholder: col.type === "dice" ? "1-6" : "Value"
+        });
+        input.addEventListener("focus", () => {
+          if (this.selectedRowIndex !== rowIndex) {
+            this.selectedRowIndex = rowIndex;
+            this.updateRowSelection();
+          }
+        });
+        input.addEventListener("input", () => {
+          row[cellKey] = input.value;
+          this.markUnsaved();
+          this.schedulePreviewUpdate();
+        });
+        input.addEventListener("blur", () => {
+          this.captureState();
+        });
+        input.addEventListener("keydown", (e) => {
+          this.handleCellKeydown(e, rowIndex, colIndex);
+        });
+        if (col.type === "reroll") {
+          input.addEventListener("blur", () => {
+            if (input.value && input.value !== "\u2014" && input.value !== "-") {
+              this.validateRerollReference(input.value);
+            }
+          });
+        }
+      });
+      const actionsCell = rowEl.createDiv({ cls: "row-actions" });
+      const duplicateBtn = actionsCell.createEl("button", {
+        text: "\u{1F4CB}",
+        cls: "row-action-btn",
+        attr: { "aria-label": "Duplicate row", "title": "Duplicate row" }
+      });
+      duplicateBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        this.duplicateRowAt(rowIndex);
+      });
+      const deleteBtn = actionsCell.createEl("button", {
+        text: "\u2715",
+        cls: "row-action-btn row-delete-btn",
+        attr: { "aria-label": "Delete row", "title": "Delete row" }
+      });
+      deleteBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        this.deleteRowAt(rowIndex);
+      });
+    });
+  }
+  buildExamplesSidebar(container) {
+    const sidebar = container.createDiv({ cls: "examples-sidebar" });
+    const toggle = sidebar.createEl("details");
+    toggle.createEl("summary", { text: "Examples & Templates" });
+    const content = toggle.createDiv({ cls: "examples-content" });
+    content.createEl("h4", { text: "Presets" });
+    const examples = [
+      { name: "Individual d6 (6 rows)", dice: "d6", count: 6 },
+      { name: "Individual d20 (20 rows)", dice: "d20", count: 20 },
+      { name: "Range d100 (10 rows)", dice: "d100", count: 10 },
+      { name: "Weighted d100 (20 rows)", dice: "d100", count: 20 }
+    ];
+    examples.forEach((example) => {
+      const btn = content.createEl("button", {
+        text: example.name,
+        cls: "example-btn"
+      });
+      btn.addEventListener("click", () => this.applyExample(example.dice, example.count));
+    });
+    content.createEl("h4", { text: "Custom Templates" });
+    content.createEl("p", { text: "No templates saved yet.", cls: "placeholder-text" });
+    const saveTemplateBtn = content.createEl("button", {
+      text: "Save as Template",
+      cls: "table-builder-btn"
+    });
+    saveTemplateBtn.addEventListener("click", () => this.saveAsTemplate());
+  }
+  buildRightPanel() {
+    const tabs = this.rightPanel.createDiv({ cls: "preview-tabs" });
+    const markdownTab = tabs.createEl("button", { text: "Markdown", cls: "tab-btn active" });
+    const htmlTab = tabs.createEl("button", { text: "Preview", cls: "tab-btn" });
+    this.previewContainer = this.rightPanel.createDiv({ cls: "preview-container" });
+    this.markdownPreview = this.previewContainer.createDiv({ cls: "markdown-preview active" });
+    this.htmlPreview = this.previewContainer.createDiv({ cls: "html-preview" });
+    markdownTab.addEventListener("click", () => {
+      markdownTab.addClass("active");
+      htmlTab.removeClass("active");
+      this.markdownPreview.addClass("active");
+      this.htmlPreview.removeClass("active");
+    });
+    htmlTab.addEventListener("click", () => {
+      htmlTab.addClass("active");
+      markdownTab.removeClass("active");
+      this.htmlPreview.addClass("active");
+      this.markdownPreview.removeClass("active");
+    });
+    const exportBtns = this.rightPanel.createDiv({ cls: "export-buttons" });
+    const copyBtn = exportBtns.createEl("button", { text: "Copy to Clipboard", cls: "table-builder-btn" });
+    copyBtn.addEventListener("click", () => this.copyToClipboard());
+    const saveBtn = exportBtns.createEl("button", { text: "Save", cls: "table-builder-btn" });
+    saveBtn.addEventListener("click", async () => await this.save());
+    const saveAsBtn = exportBtns.createEl("button", { text: "Save As...", cls: "table-builder-btn" });
+    saveAsBtn.addEventListener("click", async () => await this.saveAs());
+    const loadBtn = exportBtns.createEl("button", { text: "Load Table", cls: "table-builder-btn" });
+    loadBtn.addEventListener("click", () => this.loadTable());
+    const importBtn = exportBtns.createEl("button", { text: "Import from Clipboard", cls: "table-builder-btn" });
+    importBtn.addEventListener("click", () => this.importFromClipboard());
+    const exportDropdown = exportBtns.createEl("select", { cls: "export-format" });
+    exportDropdown.createEl("option", { text: "Markdown", value: "md" });
+    exportDropdown.createEl("option", { text: "CSV", value: "csv" });
+    exportDropdown.createEl("option", { text: "JSON", value: "json" });
+    const exportFileBtn = exportBtns.createEl("button", { text: "Export As...", cls: "table-builder-btn" });
+    exportFileBtn.addEventListener("click", () => {
+      const format = exportDropdown.value;
+      this.exportAs(format);
+    });
+    this.updatePreview();
+  }
+  schedulePreviewUpdate() {
+    if (this.previewUpdateTimer) {
+      clearTimeout(this.previewUpdateTimer);
+    }
+    this.previewUpdateTimer = setTimeout(() => {
+      this.updatePreview();
+    }, 300);
+  }
+  updatePreview() {
+    const markdown = this.generateMarkdown();
+    this.markdownPreview.empty();
+    const pre = this.markdownPreview.createEl("pre");
+    pre.createEl("code", { text: markdown });
+    this.htmlPreview.empty();
+    this.renderHTMLPreview(this.htmlPreview);
+  }
+  generateMarkdown() {
+    const lines = [];
+    lines.push("---");
+    lines.push("table-roller: true");
+    lines.push("---");
+    lines.push("");
+    lines.push(`# ${this.state.tableName}`);
+    lines.push("");
+    if (this.state.isPrivate) {
+      lines.push("private: true");
+    }
+    if (this.state.tableReroll) {
+      lines.push(`reroll: ${this.state.tableReroll}`);
+    }
+    if (this.state.isPrivate || this.state.tableReroll) {
+      lines.push("");
+    }
+    const headers = this.state.columns.map((col) => col.name);
+    lines.push("| " + headers.join(" | ") + " |");
+    lines.push("|" + headers.map(() => "----").join("|") + "|");
+    this.state.rows.forEach((row) => {
+      const cells = this.state.columns.map((col) => {
+        const key = col.type === "dice" ? "range" : col.name;
+        return row[key] || "";
+      });
+      lines.push("| " + cells.join(" | ") + " |");
+    });
+    return lines.join("\n");
+  }
+  renderHTMLPreview(container) {
+    container.createEl("h2", { text: this.state.tableName });
+    if (this.state.isPrivate || this.state.tableReroll) {
+      const info = container.createDiv({ cls: "directives-info" });
+      if (this.state.isPrivate) {
+        info.createSpan({ text: "\u{1F512} Private", cls: "badge" });
+      }
+      if (this.state.tableReroll) {
+        info.createSpan({ text: `\u21BB Rerolls: ${this.state.tableReroll}`, cls: "badge" });
+      }
+    }
+    const table = container.createEl("table", { cls: "preview-table" });
+    const thead = table.createEl("thead");
+    const headerRow = thead.createEl("tr");
+    this.state.columns.forEach((col) => {
+      headerRow.createEl("th", { text: col.name });
+    });
+    const tbody = table.createEl("tbody");
+    this.state.rows.forEach((row) => {
+      const tr = tbody.createEl("tr");
+      this.state.columns.forEach((col) => {
+        const key = col.type === "dice" ? "range" : col.name;
+        tr.createEl("td", { text: row[key] || "" });
+      });
+    });
+  }
+  // History management
   captureState() {
     if (this.historyIndex < this.history.length - 1) {
       this.history = this.history.slice(0, this.historyIndex + 1);
     }
-    const stateCopy = deepClone(this.currentState);
+    const stateCopy = JSON.parse(JSON.stringify(this.state));
     this.history.push({
       state: stateCopy,
       timestamp: Date.now()
@@ -1004,443 +1357,758 @@ var StateManager = class extends EventTarget {
       this.historyIndex++;
     }
   }
-  /**
-   * Undoes the last state change
-   * Returns true if undo was successful, false if at beginning of history
-   */
   undo() {
-    if (!this.canUndo()) {
-      return false;
+    if (this.historyIndex > 0) {
+      this.historyIndex--;
+      this.state = JSON.parse(JSON.stringify(this.history[this.historyIndex].state));
+      this.refreshUI();
+      this.markUnsaved();
     }
-    this.historyIndex--;
-    this.currentState = deepClone(this.history[this.historyIndex].state);
-    this.dispatchStateChange();
-    return true;
   }
-  /**
-   * Redoes the previously undone state change
-   * Returns true if redo was successful, false if at end of history
-   */
   redo() {
-    if (!this.canRedo()) {
-      return false;
-    }
-    this.historyIndex++;
-    this.currentState = deepClone(this.history[this.historyIndex].state);
-    this.dispatchStateChange();
-    return true;
-  }
-  /**
-   * Gets the current state
-   * Returns a deep clone to prevent external mutations
-   */
-  getState() {
-    return deepClone(this.currentState);
-  }
-  /**
-   * Sets a new state and captures it to history
-   * @param newState - The new state to set
-   * @param captureHistory - Whether to capture this change in history (default: true)
-   */
-  setState(newState, captureHistory = true) {
-    this.currentState = deepClone(newState);
-    if (captureHistory) {
-      this.captureState();
-    }
-    this.dispatchStateChange();
-  }
-  /**
-   * Checks if undo operation is available
-   * @returns True if there are states to undo to
-   */
-  canUndo() {
-    return this.historyIndex > 0;
-  }
-  /**
-   * Checks if redo operation is available
-   * @returns True if there are states to redo to
-   */
-  canRedo() {
-    return this.historyIndex < this.history.length - 1;
-  }
-  /**
-   * Gets the number of available undo operations
-   */
-  getUndoCount() {
-    return this.historyIndex;
-  }
-  /**
-   * Gets the number of available redo operations
-   */
-  getRedoCount() {
-    return this.history.length - 1 - this.historyIndex;
-  }
-  /**
-   * Clears all history and resets to the current state
-   */
-  clearHistory() {
-    this.history = [];
-    this.historyIndex = -1;
-    this.captureState();
-  }
-  /**
-   * Dispatches a custom event notifying listeners of state changes
-   * Event name: 'state-changed'
-   * Event detail: Current table state
-   */
-  dispatchStateChange() {
-    const event = new CustomEvent("state-changed", {
-      detail: deepClone(this.currentState)
-    });
-    this.dispatchEvent(event);
-  }
-  /**
-   * Updates the current state without capturing to history
-   * Useful for temporary state changes or during initialization
-   * @param newState - The new state to set
-   */
-  updateStateWithoutHistory(newState) {
-    this.currentState = deepClone(newState);
-    this.dispatchStateChange();
-  }
-  /**
-   * Gets the current history index
-   * Useful for debugging or displaying history position
-   */
-  getHistoryIndex() {
-    return this.historyIndex;
-  }
-  /**
-   * Gets the total history length
-   * Useful for debugging or displaying history information
-   */
-  getHistoryLength() {
-    return this.history.length;
-  }
-};
-
-// src/ui/io/TableBuilderIO.ts
-var import_obsidian2 = require("obsidian");
-var TableIO = class extends EventTarget {
-  constructor(app, currentFile, parser) {
-    super();
-    this.app = app;
-    this.currentFile = currentFile;
-    this.parser = parser;
-    this.state = this.getDefaultState();
-  }
-  /**
-   * Get the default table state
-   */
-  getDefaultState() {
-    return {
-      tableName: "New Table",
-      columns: [
-        { name: "d6", type: "dice", diceNotation: "d6" },
-        { name: "Result", type: "regular" }
-      ],
-      rows: [],
-      isPrivate: false
-    };
-  }
-  /**
-   * Set the current state (called from view)
-   */
-  setState(state) {
-    this.state = state;
-  }
-  /**
-   * Get the current file
-   */
-  getCurrentFile() {
-    return this.currentFile;
-  }
-  /**
-   * Set the current file
-   */
-  setCurrentFile(file) {
-    this.currentFile = file;
-  }
-  /**
-   * Generate markdown content from state
-   */
-  generateMarkdown(state) {
-    const lines = [];
-    lines.push("---");
-    lines.push("table-roller: true");
-    lines.push("---");
-    lines.push("");
-    lines.push(`# ${state.tableName}`);
-    lines.push("");
-    if (state.isPrivate) {
-      lines.push("private: true");
-    }
-    if (state.tableReroll) {
-      lines.push(`reroll: ${state.tableReroll}`);
-    }
-    if (state.isPrivate || state.tableReroll) {
-      lines.push("");
-    }
-    const headers = state.columns.map((col) => col.name);
-    lines.push("| " + headers.join(" | ") + " |");
-    lines.push("|" + headers.map(() => "----").join("|") + "|");
-    state.rows.forEach((row) => {
-      const cells = state.columns.map((col) => {
-        const key = col.type === "dice" ? "range" : col.name;
-        return row[key] || "";
-      });
-      lines.push("| " + cells.join(" | ") + " |");
-    });
-    return lines.join("\n");
-  }
-  /**
-   * Generate CSV content from state
-   */
-  generateCSV(state) {
-    const headers = state.columns.map((col) => col.name);
-    const lines = [headers.join(",")];
-    state.rows.forEach((row) => {
-      const cells = state.columns.map((col) => {
-        const key = col.type === "dice" ? "range" : col.name;
-        const value = row[key] || "";
-        return value.includes(",") || value.includes('"') ? `"${value.replace(/"/g, '""')}"` : value;
-      });
-      lines.push(cells.join(","));
-    });
-    return lines.join("\n");
-  }
-  /**
-   * Generate JSON content from state
-   */
-  generateJSON(state) {
-    return JSON.stringify({
-      tableName: state.tableName,
-      isPrivate: state.isPrivate,
-      tableReroll: state.tableReroll,
-      columns: state.columns,
-      rows: state.rows
-    }, null, 2);
-  }
-  /**
-   * Save table to current file or prompt for new file
-   */
-  async save() {
-    try {
-      if (this.currentFile) {
-        await this.saveToCurrentFile();
-      } else {
-        await this.saveAs();
-      }
-    } catch (error) {
-      console.error("Error in save:", error);
-      new import_obsidian2.Notice("Failed to save table");
+    if (this.historyIndex < this.history.length - 1) {
+      this.historyIndex++;
+      this.state = JSON.parse(JSON.stringify(this.history[this.historyIndex].state));
+      this.refreshUI();
+      this.markUnsaved();
     }
   }
-  /**
-   * Show save as dialog (new file or append)
-   */
-  async saveAs() {
-    return new Promise((resolve) => {
-      const modal = new import_obsidian2.Modal(this.app);
-      modal.titleEl.setText("Save Table As");
-      const createNewBtn = modal.contentEl.createEl("button", {
-        text: "Create New File",
-        cls: "table-builder-btn"
-      });
-      createNewBtn.style.width = "100%";
-      createNewBtn.style.marginBottom = "8px";
-      createNewBtn.addEventListener("click", async () => {
-        modal.close();
-        await this.saveToNewFile();
-        resolve();
-      });
-      const appendBtn = modal.contentEl.createEl("button", {
-        text: "Append to Existing File",
-        cls: "table-builder-btn"
-      });
-      appendBtn.style.width = "100%";
-      appendBtn.addEventListener("click", async () => {
-        modal.close();
-        await this.appendToFile();
-        resolve();
-      });
-      modal.onClose = () => resolve();
-      modal.open();
-    });
+  refreshUI() {
+    this.tableNameInput.value = this.state.tableName;
+    this.buildRowGrid();
+    this.updatePreview();
   }
-  /**
-   * Save to a new file with user-specified filename
-   */
-  async saveToNewFile() {
-    return new Promise((resolve) => {
-      const modal = new import_obsidian2.Modal(this.app);
-      modal.titleEl.setText("Save to New File");
-      const input = modal.contentEl.createEl("input", {
-        type: "text",
-        placeholder: "Filename (without .md)",
-        value: this.state.tableName
-      });
-      input.style.width = "100%";
-      input.style.padding = "8px";
-      input.style.marginBottom = "12px";
-      const btnContainer = modal.contentEl.createDiv();
-      btnContainer.style.display = "flex";
-      btnContainer.style.justifyContent = "flex-end";
-      btnContainer.style.gap = "8px";
-      const cancelBtn = btnContainer.createEl("button", { text: "Cancel" });
-      cancelBtn.addEventListener("click", () => {
-        modal.close();
-        resolve();
-      });
-      const saveBtn = btnContainer.createEl("button", { text: "Save" });
-      saveBtn.addEventListener("click", async () => {
-        const filename = input.value.trim();
-        if (!filename) {
-          new import_obsidian2.Notice("Filename cannot be empty");
-          return;
-        }
-        const fullFilename = filename.endsWith(".md") ? filename : `${filename}.md`;
-        const markdown = this.generateMarkdown(this.state);
-        try {
-          const file = await this.app.vault.create(fullFilename, markdown);
-          new import_obsidian2.Notice(`Saved to ${fullFilename}`);
-          this.currentFile = file;
-          this.dispatchEvent(new CustomEvent("file-saved", {
-            detail: { file, tableName: this.state.tableName }
-          }));
-          modal.close();
-          resolve();
-        } catch (error) {
-          console.error("Error saving file:", error);
-          new import_obsidian2.Notice("Failed to save file");
-        }
-      });
-      input.addEventListener("keypress", (e) => {
-        if (e.key === "Enter") {
-          saveBtn.click();
-        }
-      });
-      modal.onClose = () => resolve();
-      modal.open();
-      input.focus();
-    });
-  }
-  /**
-   * Save to the current file (update existing table)
-   */
-  async saveToCurrentFile() {
-    if (!this.currentFile) {
-      new import_obsidian2.Notice("No current file to save to");
+  // Column operations
+  addDiceColumn() {
+    if (this.state.columns.some((c) => c.type === "dice")) {
+      new import_obsidian2.Notice("Only one dice column is allowed");
       return;
     }
-    try {
-      const currentContent = await this.app.vault.read(this.currentFile);
-      const markdown = this.generateMarkdown(this.state);
-      const tableName = this.state.tableName;
-      const lines = currentContent.split("\n");
-      let tableStartIndex = -1;
-      let tableEndIndex = -1;
-      for (let i = 0; i < lines.length; i++) {
-        const line = lines[i].trim();
-        const headingMatch = line.match(/^#+\s*(.+)$/);
-        if (headingMatch && headingMatch[1].trim() === tableName.trim()) {
-          tableStartIndex = i;
-          break;
-        }
-      }
-      if (tableStartIndex !== -1) {
-        tableEndIndex = tableStartIndex;
-        for (let i = tableStartIndex + 1; i < lines.length; i++) {
-          const line = lines[i].trim();
-          if (line.match(/^#+\s+/)) {
-            break;
-          }
-          tableEndIndex = i;
-        }
-        while (tableEndIndex > tableStartIndex && lines[tableEndIndex].trim() === "") {
-          tableEndIndex--;
-        }
-        const markdownLines = markdown.split("\n");
-        const tableContentStart = markdownLines.findIndex((l) => l.match(/^#+\s+/));
-        const newTableContent = markdownLines.slice(tableContentStart).join("\n");
-        const before = lines.slice(0, tableStartIndex);
-        const after = lines.slice(tableEndIndex + 1);
-        while (before.length > 0 && before[before.length - 1].trim() === "") {
-          before.pop();
-        }
-        while (after.length > 0 && after[0].trim() === "") {
-          after.shift();
-        }
-        const newContent = [...before, "", newTableContent, "", ...after].join("\n");
-        await this.app.vault.modify(this.currentFile, newContent);
-        new import_obsidian2.Notice(`Saved to ${this.currentFile.path}`);
+    const modal = new import_obsidian2.Modal(this.app);
+    modal.titleEl.setText("Add Dice Column");
+    modal.contentEl.createEl("label", { text: "Select dice type:" });
+    const select = modal.contentEl.createEl("select");
+    select.style.width = "100%";
+    select.style.padding = "8px";
+    select.style.marginTop = "8px";
+    select.style.marginBottom = "12px";
+    const diceOptions = ["d4", "d6", "d8", "d10", "d12", "d20", "d100", "custom"];
+    diceOptions.forEach((dice) => {
+      select.createEl("option", { text: dice === "custom" ? "Custom..." : dice, value: dice });
+    });
+    const customContainer = modal.contentEl.createDiv();
+    customContainer.style.marginBottom = "12px";
+    customContainer.style.display = "none";
+    customContainer.createEl("label", { text: "Custom dice notation (e.g., d6, 2d6, d100):" });
+    const customInput = customContainer.createEl("input", {
+      type: "text",
+      placeholder: "d6"
+    });
+    customInput.style.width = "100%";
+    customInput.style.padding = "8px";
+    customInput.style.marginTop = "4px";
+    select.addEventListener("change", () => {
+      if (select.value === "custom") {
+        customContainer.style.display = "block";
+        customInput.focus();
       } else {
-        const markdownLines = markdown.split("\n");
-        const tableContentStart = markdownLines.findIndex((l) => l.startsWith("#"));
-        const newTableContent = markdownLines.slice(tableContentStart).join("\n");
-        const newContent = currentContent + "\n\n" + newTableContent;
-        await this.app.vault.modify(this.currentFile, newContent);
-        new import_obsidian2.Notice(`Table added to ${this.currentFile.path}`);
+        customContainer.style.display = "none";
       }
-      this.dispatchEvent(new CustomEvent("file-saved", {
-        detail: { file: this.currentFile, tableName: this.state.tableName }
-      }));
-    } catch (error) {
-      console.error("Error saving to current file:", error);
-      new import_obsidian2.Notice("Failed to save to file");
+    });
+    const btnContainer = modal.contentEl.createDiv();
+    btnContainer.style.display = "flex";
+    btnContainer.style.justifyContent = "flex-end";
+    btnContainer.style.gap = "8px";
+    const cancelBtn = btnContainer.createEl("button", { text: "Cancel" });
+    cancelBtn.addEventListener("click", () => modal.close());
+    const addBtn = btnContainer.createEl("button", { text: "Add" });
+    addBtn.addEventListener("click", () => {
+      let diceType = select.value;
+      if (diceType === "custom") {
+        diceType = customInput.value.trim().toLowerCase();
+        if (!diceType) {
+          new import_obsidian2.Notice("Please enter a dice notation");
+          return;
+        }
+        if (!/^\d*d\d+$/.test(diceType)) {
+          new import_obsidian2.Notice("Invalid dice notation. Use format like: d6, 2d6, d100");
+          return;
+        }
+      }
+      this.captureState();
+      this.state.columns.unshift({
+        name: diceType,
+        type: "dice",
+        diceNotation: diceType
+      });
+      this.markUnsaved();
+      this.leftPanel.empty();
+      this.buildLeftPanel();
+      this.schedulePreviewUpdate();
+      modal.close();
+    });
+    modal.open();
+  }
+  addColumn(type) {
+    if (type === "reroll" && this.state.columns.some((c) => c.type === "reroll")) {
+      new import_obsidian2.Notice("Only one reroll column is allowed");
+      return;
+    }
+    this.captureState();
+    const name = type === "reroll" ? "reroll" : `Column ${this.state.columns.length}`;
+    this.state.columns.push({ name, type });
+    this.markUnsaved();
+    this.leftPanel.empty();
+    this.buildLeftPanel();
+    this.schedulePreviewUpdate();
+  }
+  deleteColumn(index) {
+    if (this.state.columns.length <= 1) {
+      new import_obsidian2.Notice("Cannot delete the last column");
+      return;
+    }
+    this.captureState();
+    const col = this.state.columns[index];
+    this.state.columns.splice(index, 1);
+    const key = col.type === "dice" ? "range" : col.name;
+    this.state.rows.forEach((row) => {
+      delete row[key];
+    });
+    this.markUnsaved();
+    this.leftPanel.empty();
+    this.buildLeftPanel();
+    this.schedulePreviewUpdate();
+  }
+  // Row operations
+  addRow() {
+    this.captureState();
+    this.state.rows.push({});
+    this.markUnsaved();
+    this.buildRowGrid();
+    this.schedulePreviewUpdate();
+  }
+  duplicateRowAt(index) {
+    if (this.state.rows.length === 0)
+      return;
+    this.captureState();
+    const row = this.state.rows[index];
+    const copy = JSON.parse(JSON.stringify(row));
+    this.state.rows.splice(index + 1, 0, copy);
+    this.selectedRowIndex = index + 1;
+    this.markUnsaved();
+    this.buildRowGrid();
+    this.schedulePreviewUpdate();
+  }
+  deleteRowAt(index) {
+    if (this.state.rows.length === 0)
+      return;
+    this.captureState();
+    this.state.rows.splice(index, 1);
+    if (this.selectedRowIndex >= this.state.rows.length && this.selectedRowIndex > 0) {
+      this.selectedRowIndex--;
+    }
+    if (index === this.selectedRowIndex && this.state.rows.length > 0) {
+      this.selectedRowIndex = Math.min(index, this.state.rows.length - 1);
+    }
+    this.markUnsaved();
+    this.buildRowGrid();
+    this.schedulePreviewUpdate();
+  }
+  clearResults() {
+    this.captureState();
+    this.state.rows.forEach((row) => {
+      this.state.columns.forEach((col) => {
+        if (col.type === "regular") {
+          row[col.name] = "";
+        }
+      });
+    });
+    this.markUnsaved();
+    this.buildRowGrid();
+    this.schedulePreviewUpdate();
+  }
+  deleteAllRows() {
+    const modal = new import_obsidian2.Modal(this.app);
+    modal.titleEl.setText("Delete All Rows?");
+    modal.contentEl.setText("This will delete all rows. Do you want to proceed?.");
+    const btnContainer = modal.contentEl.createDiv({ cls: "modal-button-container" });
+    const cancelBtn = btnContainer.createEl("button", { text: "Cancel" });
+    cancelBtn.addEventListener("click", () => modal.close());
+    const confirmBtn = btnContainer.createEl("button", { text: "Delete All", cls: "mod-warning" });
+    confirmBtn.addEventListener("click", () => {
+      this.captureState();
+      this.state.rows = [];
+      this.selectedRowIndex = 0;
+      this.markUnsaved();
+      this.buildRowGrid();
+      this.schedulePreviewUpdate();
+      modal.close();
+    });
+    modal.open();
+  }
+  // Keyboard navigation
+  handleCellKeydown(e, rowIndex, colIndex) {
+    const rows = this.state.rows.length;
+    const cols = this.state.columns.length;
+    let newRow = rowIndex;
+    let newCol = colIndex;
+    let shouldMove = false;
+    if (e.key === "Tab") {
+      e.preventDefault();
+      if (e.shiftKey) {
+        newCol--;
+        if (newCol < 0) {
+          newCol = cols - 1;
+          newRow--;
+        }
+      } else {
+        newCol++;
+        if (newCol >= cols) {
+          newCol = 0;
+          newRow++;
+        }
+      }
+      shouldMove = true;
+    } else if (e.key === "Enter") {
+      e.preventDefault();
+      if (e.shiftKey) {
+        newRow--;
+      } else {
+        newRow++;
+      }
+      shouldMove = true;
+    }
+    if (shouldMove && newRow >= 0 && newRow < rows && newCol >= 0 && newCol < cols) {
+      this.selectedRowIndex = newRow;
+      setTimeout(() => {
+        const rowEls = this.rowGrid.querySelectorAll(".row-grid-row");
+        const rowEl = rowEls[newRow];
+        const inputs = rowEl.querySelectorAll("input");
+        const input = inputs[newCol];
+        if (input) {
+          input.focus();
+          input.select();
+        }
+      }, 0);
     }
   }
-  /**
-   * Show file picker and append table to selected file
-   */
+  updateRowSelection() {
+    const rowEls = this.rowGrid.querySelectorAll(".row-grid-row");
+    rowEls.forEach((el, idx) => {
+      if (idx === this.selectedRowIndex) {
+        el.addClass("selected");
+      } else {
+        el.removeClass("selected");
+      }
+    });
+  }
+  onColumnDragStart(e, index) {
+    this.draggedColumnIndex = index;
+    if (e.dataTransfer) {
+      e.dataTransfer.effectAllowed = "move";
+    }
+  }
+  onColumnDragOver(e) {
+    e.preventDefault();
+    if (e.dataTransfer) {
+      e.dataTransfer.dropEffect = "move";
+    }
+  }
+  onColumnDrop(e, targetIndex) {
+    e.preventDefault();
+    if (this.draggedColumnIndex === targetIndex)
+      return;
+    this.captureState();
+    const [moved] = this.state.columns.splice(this.draggedColumnIndex, 1);
+    this.state.columns.splice(targetIndex, 0, moved);
+    this.draggedColumnIndex = -1;
+    this.markUnsaved();
+    this.leftPanel.empty();
+    this.buildLeftPanel();
+    this.schedulePreviewUpdate();
+  }
+  // Column operations
+  showColumnContextMenu(e, colIndex) {
+    if (this.activeMenuCloseListener) {
+      document.removeEventListener("click", this.activeMenuCloseListener);
+      this.activeMenuCloseListener = null;
+    }
+    if (this.activeContextMenu) {
+      try {
+        if (this.activeContextMenu.parentNode) {
+          this.activeContextMenu.parentNode.removeChild(this.activeContextMenu);
+        }
+      } catch (e2) {
+      }
+      this.activeContextMenu = null;
+    }
+    const menu = document.createElement("div");
+    menu.className = "column-context-menu";
+    menu.style.position = "fixed";
+    menu.style.left = `${e.clientX}px`;
+    menu.style.top = `${e.clientY}px`;
+    menu.style.zIndex = "10000";
+    menu.style.background = "var(--background-secondary)";
+    menu.style.border = "1px solid var(--background-modifier-border)";
+    menu.style.borderRadius = "4px";
+    menu.style.padding = "4px";
+    menu.style.minWidth = "150px";
+    const pasteOption = menu.createEl("div", {
+      text: "Paste into column",
+      cls: "context-menu-item"
+    });
+    pasteOption.style.padding = "6px 12px";
+    pasteOption.style.cursor = "pointer";
+    pasteOption.addEventListener("mouseenter", () => {
+      pasteOption.style.background = "var(--background-modifier-hover)";
+    });
+    pasteOption.addEventListener("mouseleave", () => {
+      pasteOption.style.background = "";
+    });
+    pasteOption.addEventListener("click", async () => {
+      if (this.activeMenuCloseListener) {
+        document.removeEventListener("click", this.activeMenuCloseListener);
+        this.activeMenuCloseListener = null;
+      }
+      await this.pasteIntoColumn(colIndex);
+      if (menu.parentNode && document.body.contains(menu)) {
+        try {
+          menu.parentNode.removeChild(menu);
+        } catch (e2) {
+        }
+      }
+      this.activeContextMenu = null;
+    });
+    document.body.appendChild(menu);
+    this.activeContextMenu = menu;
+    const closeMenu = (event) => {
+      if (!menu.contains(event.target)) {
+        document.removeEventListener("click", closeMenu);
+        this.activeMenuCloseListener = null;
+        if (document.body.contains(menu)) {
+          try {
+            document.body.removeChild(menu);
+          } catch (error) {
+          }
+        }
+        if (this.activeContextMenu === menu) {
+          this.activeContextMenu = null;
+        }
+      }
+    };
+    this.activeMenuCloseListener = closeMenu;
+    setTimeout(() => {
+      if (this.activeContextMenu === menu) {
+        document.addEventListener("click", closeMenu);
+      }
+    }, 0);
+  }
+  async pasteIntoColumn(colIndex) {
+    try {
+      const text = await navigator.clipboard.readText();
+      if (!text.trim()) {
+        new import_obsidian2.Notice("Clipboard is empty");
+        return;
+      }
+      let values;
+      if (text.includes("	")) {
+        const rows = text.split(/\r?\n/).filter((r) => r.trim());
+        values = rows.map((row) => row.split("	")[0].trim());
+      } else if (text.includes(",") && !text.includes("\n")) {
+        values = text.split(",").map((v) => v.trim()).filter((v) => v);
+      } else {
+        values = text.split(/\r?\n/).map((v) => v.trim()).filter((v) => v);
+      }
+      if (values.length === 0) {
+        new import_obsidian2.Notice("No valid data to paste");
+        return;
+      }
+      this.captureState();
+      const col = this.state.columns[colIndex];
+      const cellKey = col.type === "dice" ? "range" : col.name;
+      const rowsNeeded = values.length;
+      while (this.state.rows.length < rowsNeeded) {
+        this.state.rows.push({});
+      }
+      for (let i = 0; i < values.length; i++) {
+        this.state.rows[i][cellKey] = values[i];
+      }
+      this.markUnsaved();
+      this.buildRowGrid();
+      this.schedulePreviewUpdate();
+      new import_obsidian2.Notice(`Pasted ${values.length} values into ${col.name}`);
+    } catch (error) {
+      console.error("Error pasting into column:", error);
+      new import_obsidian2.Notice("Failed to paste from clipboard");
+    }
+  }
+  // Examples
+  applyExample(diceNotation, rowCount) {
+    this.captureState();
+    this.state.columns[0] = {
+      name: diceNotation,
+      type: "dice",
+      diceNotation
+    };
+    this.state.rows = this.generateDefaultRows(diceNotation, rowCount);
+    this.markUnsaved();
+    this.leftPanel.empty();
+    this.buildLeftPanel();
+    this.schedulePreviewUpdate();
+    new import_obsidian2.Notice(`Applied ${diceNotation} with ${rowCount} rows`);
+  }
+  generateRows(diceNotation, rowCount, groupSize, remainder) {
+    this.captureState();
+    this.state.rows = this.generateDefaultRows(diceNotation, rowCount, groupSize, remainder);
+    this.markUnsaved();
+    this.buildRowGrid();
+    this.schedulePreviewUpdate();
+    new import_obsidian2.Notice(`Generated ${rowCount} rows for ${diceNotation}`);
+  }
+  showGenerateRowsModal(diceNotation) {
+    const modal = new import_obsidian2.Modal(this.app);
+    modal.titleEl.setText(`Generate Rows for ${diceNotation}`);
+    const match = diceNotation.match(/^(\d*)d(\d+)$/i);
+    if (!match) {
+      new import_obsidian2.Notice("Invalid dice notation");
+      return;
+    }
+    const numDice = match[1] ? parseInt(match[1]) : 1;
+    const sides = parseInt(match[2]);
+    const minValue = numDice;
+    const maxValue = numDice * sides;
+    const totalRange = maxValue - minValue + 1;
+    const generateOptions = [];
+    generateOptions.push({ name: `All values (${totalRange} rows)`, count: totalRange });
+    const commonGroupSizes = [2, 3, 5, 10];
+    for (const groupSize of commonGroupSizes) {
+      if (groupSize < totalRange) {
+        const rowCount = Math.ceil(totalRange / groupSize);
+        generateOptions.push({ name: `Every ${groupSize} (~${rowCount} rows)`, count: rowCount, groupSize });
+      }
+    }
+    const formContainer = modal.contentEl.createDiv();
+    formContainer.style.marginBottom = "12px";
+    const optionLabel = formContainer.createEl("label", { text: "Range option:" });
+    optionLabel.style.display = "block";
+    optionLabel.style.marginBottom = "4px";
+    const optionSelect = formContainer.createEl("select");
+    optionSelect.style.width = "100%";
+    optionSelect.style.padding = "8px";
+    optionSelect.style.marginBottom = "12px";
+    generateOptions.forEach((option) => {
+      optionSelect.createEl("option", {
+        text: option.name,
+        value: option.groupSize ? option.groupSize.toString() : "all"
+      });
+    });
+    optionSelect.createEl("option", { text: "Custom", value: "custom" });
+    const customInputContainer = formContainer.createDiv();
+    customInputContainer.style.display = "none";
+    customInputContainer.style.marginBottom = "12px";
+    const customLabel = customInputContainer.createEl("label", { text: "Range (values per row):" });
+    customLabel.style.display = "block";
+    customLabel.style.marginBottom = "4px";
+    const customInput = customInputContainer.createEl("input", {
+      type: "number",
+      placeholder: "2",
+      attr: { min: "2", max: totalRange.toString() }
+    });
+    customInput.style.width = "100%";
+    customInput.style.padding = "8px";
+    optionSelect.addEventListener("change", () => {
+      customInputContainer.style.display = optionSelect.value === "custom" ? "block" : "none";
+    });
+    const remainderContainer = formContainer.createDiv();
+    remainderContainer.style.marginBottom = "12px";
+    const remainderLabel = remainderContainer.createEl("label", { text: "Handle remainder:" });
+    remainderLabel.style.display = "block";
+    remainderLabel.style.marginBottom = "4px";
+    const remainderSelect = remainderContainer.createEl("select");
+    remainderSelect.style.width = "100%";
+    remainderSelect.style.padding = "8px";
+    remainderSelect.createEl("option", { text: "Expand first row (add to first range)", value: "expand-first" });
+    remainderSelect.createEl("option", { text: "Expand last row (add to last range)", value: "expand-last", attr: { selected: "selected" } });
+    remainderSelect.createEl("option", { text: "Additional row at start", value: "row-first" });
+    remainderSelect.createEl("option", { text: "Additional row at end", value: "row-last" });
+    const generateBtn = formContainer.createEl("button", {
+      text: "Generate",
+      cls: "table-builder-btn"
+    });
+    generateBtn.style.width = "100%";
+    generateBtn.addEventListener("click", () => {
+      const selectedValue = optionSelect.value;
+      let groupSize;
+      if (selectedValue === "all") {
+        groupSize = void 0;
+      } else if (selectedValue === "custom") {
+        groupSize = parseInt(customInput.value);
+        if (!groupSize || groupSize < 2) {
+          new import_obsidian2.Notice("Range must be at least 2");
+          return;
+        }
+        if (groupSize > totalRange) {
+          new import_obsidian2.Notice(`Range cannot exceed total range (${totalRange})`);
+          return;
+        }
+      } else {
+        groupSize = parseInt(selectedValue);
+      }
+      const remainder = remainderSelect.value;
+      const rowCount = groupSize ? Math.ceil(totalRange / groupSize) : totalRange;
+      this.generateRows(diceNotation, rowCount, groupSize, remainder);
+      modal.close();
+    });
+    modal.open();
+  }
+  // Template operations
+  async saveAsTemplate() {
+    const modal = new import_obsidian2.Modal(this.app);
+    modal.titleEl.setText("Save as Template");
+    const input = modal.contentEl.createEl("input", {
+      type: "text",
+      placeholder: "Template name",
+      value: this.state.tableName + " Template"
+    });
+    input.style.width = "100%";
+    input.style.padding = "8px";
+    input.style.marginBottom = "12px";
+    const btnContainer = modal.contentEl.createDiv();
+    btnContainer.style.display = "flex";
+    btnContainer.style.justifyContent = "flex-end";
+    btnContainer.style.gap = "8px";
+    const cancelBtn = btnContainer.createEl("button", { text: "Cancel" });
+    cancelBtn.addEventListener("click", () => modal.close());
+    const saveBtn = btnContainer.createEl("button", { text: "Save" });
+    saveBtn.addEventListener("click", async () => {
+      const templateName = input.value.trim();
+      if (!templateName) {
+        new import_obsidian2.Notice("Template name cannot be empty");
+        return;
+      }
+      await this.saveTemplate(templateName);
+      modal.close();
+    });
+    input.addEventListener("keypress", (e) => {
+      if (e.key === "Enter") {
+        saveBtn.click();
+      }
+    });
+    modal.open();
+    input.focus();
+  }
+  async saveTemplate(templateName) {
+    try {
+      const templatesFolder = ".table-templates";
+      const folder = this.app.vault.getAbstractFileByPath(templatesFolder);
+      if (!folder) {
+        await this.app.vault.createFolder(templatesFolder);
+      }
+      const templateState = {
+        tableName: templateName,
+        columns: JSON.parse(JSON.stringify(this.state.columns)),
+        rows: this.state.rows.map(() => ({})),
+        // Empty rows with same count
+        isPrivate: this.state.isPrivate,
+        tableReroll: this.state.tableReroll
+      };
+      const lines = [];
+      lines.push("---");
+      lines.push("table-roller-template: true");
+      lines.push("---");
+      lines.push("");
+      lines.push(`# ${templateName}`);
+      lines.push("");
+      lines.push("```json");
+      lines.push(JSON.stringify(templateState, null, 2));
+      lines.push("```");
+      const filename = `${templatesFolder}/${templateName}.md`;
+      await this.app.vault.create(filename, lines.join("\n"));
+      new import_obsidian2.Notice(`Template saved: ${templateName}`);
+    } catch (error) {
+      console.error("Error saving template:", error);
+      new import_obsidian2.Notice("Failed to save template");
+    }
+  }
+  // Import/Export
+  async importFromClipboard() {
+    try {
+      const text = await navigator.clipboard.readText();
+      const lines = text.split("\n").filter((l) => l.trim().includes("|"));
+      if (lines.length < 2) {
+        new import_obsidian2.Notice("No valid table found in clipboard");
+        return;
+      }
+      const headerLine = lines[0];
+      const headers = headerLine.split("|").map((h) => h.trim()).filter((h) => h.length > 0);
+      if (headers.length === 0) {
+        new import_obsidian2.Notice("Could not parse table headers");
+        return;
+      }
+      const columns = headers.map((h) => {
+        if (/^\d*d\d+$/i.test(h.trim())) {
+          return { name: h, type: "dice", diceNotation: h.toLowerCase() };
+        } else if (/^reroll$/i.test(h.trim())) {
+          return { name: h, type: "reroll" };
+        } else {
+          return { name: h, type: "regular" };
+        }
+      });
+      const rows = [];
+      for (let i = 2; i < lines.length; i++) {
+        const cells = lines[i].split("|").map((c) => c.trim()).filter((_, idx) => idx > 0 && idx <= headers.length);
+        if (cells.length > 0) {
+          const row = {};
+          headers.forEach((header, idx) => {
+            const col = columns[idx];
+            const key = col.type === "dice" ? "range" : col.name;
+            row[key] = cells[idx] || "";
+          });
+          rows.push(row);
+        }
+      }
+      this.captureState();
+      this.state.columns = columns;
+      this.state.rows = rows;
+      this.markUnsaved();
+      this.leftPanel.empty();
+      this.buildLeftPanel();
+      this.schedulePreviewUpdate();
+      new import_obsidian2.Notice("Table imported from clipboard");
+    } catch (error) {
+      console.error("Import error:", error);
+      new import_obsidian2.Notice("Failed to import from clipboard");
+    }
+  }
+  async copyToClipboard() {
+    const markdown = this.generateMarkdown();
+    await navigator.clipboard.writeText(markdown);
+    new import_obsidian2.Notice("Copied to clipboard");
+  }
+  async save() {
+    if (!await this.validate()) {
+      return;
+    }
+    if (this.currentFile) {
+      await this.saveToCurrentFile();
+      return;
+    }
+    await this.saveAs();
+  }
+  async saveAs() {
+    if (!await this.validate()) {
+      return;
+    }
+    const modal = new import_obsidian2.Modal(this.app);
+    modal.titleEl.setText("Save Table As");
+    const createNewBtn = modal.contentEl.createEl("button", {
+      text: "Create New File",
+      cls: "table-builder-btn"
+    });
+    createNewBtn.style.width = "100%";
+    createNewBtn.style.marginBottom = "8px";
+    createNewBtn.addEventListener("click", () => {
+      modal.close();
+      this.saveToNewFile();
+    });
+    const appendBtn = modal.contentEl.createEl("button", {
+      text: "Append to Existing File",
+      cls: "table-builder-btn"
+    });
+    appendBtn.style.width = "100%";
+    appendBtn.addEventListener("click", () => {
+      modal.close();
+      this.appendToFile();
+    });
+    modal.open();
+  }
+  async saveToNewFile() {
+    const modal = new import_obsidian2.Modal(this.app);
+    modal.titleEl.setText("Save to New File");
+    const input = modal.contentEl.createEl("input", {
+      type: "text",
+      placeholder: "Filename (without .md)",
+      value: this.state.tableName
+    });
+    input.style.width = "100%";
+    input.style.padding = "8px";
+    input.style.marginBottom = "12px";
+    const btnContainer = modal.contentEl.createDiv();
+    btnContainer.style.display = "flex";
+    btnContainer.style.justifyContent = "flex-end";
+    btnContainer.style.gap = "8px";
+    const cancelBtn = btnContainer.createEl("button", { text: "Cancel" });
+    cancelBtn.addEventListener("click", () => modal.close());
+    const saveBtn = btnContainer.createEl("button", { text: "Save" });
+    saveBtn.addEventListener("click", async () => {
+      const filename = input.value.trim();
+      if (!filename) {
+        new import_obsidian2.Notice("Filename cannot be empty");
+        return;
+      }
+      const fullFilename = filename.endsWith(".md") ? filename : `${filename}.md`;
+      const markdown = this.generateMarkdown();
+      try {
+        const file = await this.app.vault.create(fullFilename, markdown);
+        new import_obsidian2.Notice(`Saved to ${fullFilename}`);
+        this.currentFile = file;
+        this.hasUnsavedChanges = false;
+        await this.roller.loadTables();
+        modal.close();
+      } catch (error) {
+        console.error("Error saving file:", error);
+        new import_obsidian2.Notice("Failed to save file");
+      }
+    });
+    input.addEventListener("keypress", (e) => {
+      if (e.key === "Enter") {
+        saveBtn.click();
+      }
+    });
+    modal.open();
+    input.focus();
+  }
   async appendToFile() {
     const files = this.app.vault.getMarkdownFiles().filter((f) => !f.path.startsWith(".table-templates/"));
     if (files.length === 0) {
       new import_obsidian2.Notice("No markdown files found");
       return;
     }
-    return new Promise((resolve) => {
-      const modal = new import_obsidian2.Modal(this.app);
-      modal.titleEl.setText("Select File to Append To");
-      const fileList = modal.contentEl.createDiv({ cls: "file-list" });
-      fileList.style.maxHeight = "400px";
-      fileList.style.overflowY = "auto";
-      files.forEach((file) => {
-        const fileBtn = fileList.createEl("button", {
-          text: file.path,
-          cls: "file-option"
-        });
-        fileBtn.style.display = "block";
-        fileBtn.style.width = "100%";
-        fileBtn.style.textAlign = "left";
-        fileBtn.style.padding = "8px";
-        fileBtn.style.marginBottom = "4px";
-        fileBtn.style.border = "1px solid var(--background-modifier-border)";
-        fileBtn.style.background = "var(--background-secondary)";
-        fileBtn.style.cursor = "pointer";
-        fileBtn.addEventListener("click", async () => {
-          modal.close();
-          await this.appendToSpecificFile(file);
-          resolve();
-        });
-        fileBtn.addEventListener("mouseenter", () => {
-          fileBtn.style.background = "var(--background-modifier-hover)";
-        });
-        fileBtn.addEventListener("mouseleave", () => {
-          fileBtn.style.background = "var(--background-secondary)";
-        });
+    const modal = new import_obsidian2.Modal(this.app);
+    modal.titleEl.setText("Select File to Append To");
+    const fileList = modal.contentEl.createDiv({ cls: "file-list" });
+    fileList.style.maxHeight = "400px";
+    fileList.style.overflowY = "auto";
+    files.forEach((file) => {
+      const fileBtn = fileList.createEl("button", {
+        text: file.path,
+        cls: "file-option"
       });
-      modal.onClose = () => resolve();
-      modal.open();
+      fileBtn.style.display = "block";
+      fileBtn.style.width = "100%";
+      fileBtn.style.textAlign = "left";
+      fileBtn.style.padding = "8px";
+      fileBtn.style.marginBottom = "4px";
+      fileBtn.style.border = "1px solid var(--background-modifier-border)";
+      fileBtn.style.background = "var(--background-secondary)";
+      fileBtn.style.cursor = "pointer";
+      fileBtn.addEventListener("click", async () => {
+        modal.close();
+        await this.appendToSpecificFile(file);
+      });
+      fileBtn.addEventListener("mouseenter", () => {
+        fileBtn.style.background = "var(--background-modifier-hover)";
+      });
+      fileBtn.addEventListener("mouseleave", () => {
+        fileBtn.style.background = "var(--background-secondary)";
+      });
     });
+    modal.open();
   }
-  /**
-   * Append table to a specific file
-   */
   async appendToSpecificFile(file) {
     try {
       const currentContent = await this.app.vault.read(file);
-      const markdown = this.generateMarkdown(this.state);
+      const markdown = this.generateMarkdown();
       const lines = markdown.split("\n");
       const tableStartIndex = lines.findIndex((l) => l.startsWith("#"));
       const tableContent = lines.slice(tableStartIndex).join("\n");
@@ -1448,61 +2116,50 @@ var TableIO = class extends EventTarget {
       await this.app.vault.modify(file, newContent);
       new import_obsidian2.Notice(`Appended to ${file.path}`);
       this.currentFile = file;
-      this.dispatchEvent(new CustomEvent("file-appended", {
-        detail: { file, tableName: this.state.tableName }
-      }));
+      this.hasUnsavedChanges = false;
+      await this.roller.loadTables();
     } catch (error) {
       console.error("Error appending to file:", error);
       new import_obsidian2.Notice("Failed to append to file");
     }
   }
-  /**
-   * Load table from file with file picker
-   */
-  async load() {
+  async loadTable() {
     const files = this.app.vault.getMarkdownFiles().filter((f) => !f.path.startsWith(".table-templates/"));
     if (files.length === 0) {
       new import_obsidian2.Notice("No markdown files found");
       return;
     }
-    return new Promise((resolve) => {
-      const modal = new import_obsidian2.Modal(this.app);
-      modal.titleEl.setText("Load Table from File");
-      const fileList = modal.contentEl.createDiv({ cls: "file-list" });
-      fileList.style.maxHeight = "400px";
-      fileList.style.overflowY = "auto";
-      files.forEach((file) => {
-        const fileBtn = fileList.createEl("button", {
-          text: file.path,
-          cls: "file-option"
-        });
-        fileBtn.style.display = "block";
-        fileBtn.style.width = "100%";
-        fileBtn.style.textAlign = "left";
-        fileBtn.style.padding = "8px";
-        fileBtn.style.marginBottom = "4px";
-        fileBtn.style.border = "1px solid var(--background-modifier-border)";
-        fileBtn.style.background = "var(--background-secondary)";
-        fileBtn.style.cursor = "pointer";
-        fileBtn.addEventListener("click", async () => {
-          modal.close();
-          await this.loadFromFile(file);
-          resolve();
-        });
-        fileBtn.addEventListener("mouseenter", () => {
-          fileBtn.style.background = "var(--background-modifier-hover)";
-        });
-        fileBtn.addEventListener("mouseleave", () => {
-          fileBtn.style.background = "var(--background-secondary)";
-        });
+    const modal = new import_obsidian2.Modal(this.app);
+    modal.titleEl.setText("Load Table from File");
+    const fileList = modal.contentEl.createDiv({ cls: "file-list" });
+    fileList.style.maxHeight = "400px";
+    fileList.style.overflowY = "auto";
+    files.forEach((file) => {
+      const fileBtn = fileList.createEl("button", {
+        text: file.path,
+        cls: "file-option"
       });
-      modal.onClose = () => resolve();
-      modal.open();
+      fileBtn.style.display = "block";
+      fileBtn.style.width = "100%";
+      fileBtn.style.textAlign = "left";
+      fileBtn.style.padding = "8px";
+      fileBtn.style.marginBottom = "4px";
+      fileBtn.style.border = "1px solid var(--background-modifier-border)";
+      fileBtn.style.background = "var(--background-secondary)";
+      fileBtn.style.cursor = "pointer";
+      fileBtn.addEventListener("click", async () => {
+        modal.close();
+        await this.loadFromFile(file);
+      });
+      fileBtn.addEventListener("mouseenter", () => {
+        fileBtn.style.background = "var(--background-modifier-hover)";
+      });
+      fileBtn.addEventListener("mouseleave", () => {
+        fileBtn.style.background = "var(--background-secondary)";
+      });
     });
+    modal.open();
   }
-  /**
-   * Load table from a specific file
-   */
   async loadFromFile(file) {
     try {
       this.currentFile = file;
@@ -1516,53 +2173,43 @@ var TableIO = class extends EventTarget {
       if (tableNames.length === 1) {
         await this.loadParsedTable(tableNames[0], parsed.tables[tableNames[0]], parsed);
       } else {
-        await this.showTablePicker(tableNames, parsed);
+        this.showTablePicker(tableNames, parsed);
       }
     } catch (error) {
       console.error("Error loading table:", error);
       new import_obsidian2.Notice("Failed to load table");
     }
   }
-  /**
-   * Show table picker modal when multiple tables exist in file
-   */
-  async showTablePicker(tableNames, parsed) {
-    return new Promise((resolve) => {
-      const modal = new import_obsidian2.Modal(this.app);
-      modal.titleEl.setText("Select Table");
-      const tableList = modal.contentEl.createDiv({ cls: "table-list" });
-      tableNames.forEach((name) => {
-        const btn = tableList.createEl("button", {
-          text: name,
-          cls: "table-option"
-        });
-        btn.style.display = "block";
-        btn.style.width = "100%";
-        btn.style.textAlign = "left";
-        btn.style.padding = "8px";
-        btn.style.marginBottom = "4px";
-        btn.style.border = "1px solid var(--background-modifier-border)";
-        btn.style.background = "var(--background-secondary)";
-        btn.style.cursor = "pointer";
-        btn.addEventListener("click", async () => {
-          modal.close();
-          await this.loadParsedTable(name, parsed.tables[name], parsed);
-          resolve();
-        });
-        btn.addEventListener("mouseenter", () => {
-          btn.style.background = "var(--background-modifier-hover)";
-        });
-        btn.addEventListener("mouseleave", () => {
-          btn.style.background = "var(--background-secondary)";
-        });
+  showTablePicker(tableNames, parsed) {
+    const modal = new import_obsidian2.Modal(this.app);
+    modal.titleEl.setText("Select Table");
+    const tableList = modal.contentEl.createDiv({ cls: "table-list" });
+    tableNames.forEach((name) => {
+      const btn = tableList.createEl("button", {
+        text: name,
+        cls: "table-option"
       });
-      modal.onClose = () => resolve();
-      modal.open();
+      btn.style.display = "block";
+      btn.style.width = "100%";
+      btn.style.textAlign = "left";
+      btn.style.padding = "8px";
+      btn.style.marginBottom = "4px";
+      btn.style.border = "1px solid var(--background-modifier-border)";
+      btn.style.background = "var(--background-secondary)";
+      btn.style.cursor = "pointer";
+      btn.addEventListener("click", async () => {
+        modal.close();
+        await this.loadParsedTable(name, parsed.tables[name], parsed);
+      });
+      btn.addEventListener("mouseenter", () => {
+        btn.style.background = "var(--background-modifier-hover)";
+      });
+      btn.addEventListener("mouseleave", () => {
+        btn.style.background = "var(--background-secondary)";
+      });
     });
+    modal.open();
   }
-  /**
-   * Load a parsed table into state
-   */
   async loadParsedTable(tableName, table, parsed) {
     const columns = [];
     const rows = [];
@@ -1617,277 +2264,205 @@ var TableIO = class extends EventTarget {
       isPrivate: table.private || false,
       tableReroll: table.reroll
     };
-    this.dispatchEvent(new CustomEvent("file-loaded", {
-      detail: {
-        file: this.currentFile,
-        tableName,
-        state: this.state
-      }
-    }));
+    this.history = [];
+    this.historyIndex = -1;
+    this.hasUnsavedChanges = false;
+    this.leftPanel.empty();
+    this.buildLeftPanel();
+    this.updatePreview();
     new import_obsidian2.Notice(`Loaded table: ${tableName}`);
   }
-  /**
-   * Export table in specified format
-   */
+  async saveToCurrentFile() {
+    if (!this.currentFile)
+      return;
+    try {
+      const currentContent = await this.app.vault.read(this.currentFile);
+      const markdown = this.generateMarkdown();
+      const tableName = this.state.tableName;
+      const tableHeading = `# ${tableName}`;
+      const lines = currentContent.split("\n");
+      let tableStartIndex = -1;
+      let tableEndIndex = -1;
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i].trim();
+        const headingMatch = line.match(/^#+\s*(.+)$/);
+        if (headingMatch && headingMatch[1].trim() === tableName.trim()) {
+          tableStartIndex = i;
+          break;
+        }
+      }
+      if (tableStartIndex !== -1) {
+        tableEndIndex = tableStartIndex;
+        for (let i = tableStartIndex + 1; i < lines.length; i++) {
+          const line = lines[i].trim();
+          if (line.match(/^#+\s+/)) {
+            break;
+          }
+          tableEndIndex = i;
+        }
+        while (tableEndIndex > tableStartIndex && lines[tableEndIndex].trim() === "") {
+          tableEndIndex--;
+        }
+        const markdownLines = markdown.split("\n");
+        const tableContentStart = markdownLines.findIndex((l) => l.match(/^#+\s+/));
+        const newTableContent = markdownLines.slice(tableContentStart).join("\n");
+        const before = lines.slice(0, tableStartIndex);
+        const after = lines.slice(tableEndIndex + 1);
+        while (before.length > 0 && before[before.length - 1].trim() === "") {
+          before.pop();
+        }
+        while (after.length > 0 && after[0].trim() === "") {
+          after.shift();
+        }
+        const newContent = [...before, "", newTableContent, "", ...after].join("\n");
+        await this.app.vault.modify(this.currentFile, newContent);
+        new import_obsidian2.Notice(`Saved to ${this.currentFile.path}`);
+      } else {
+        const markdownLines = markdown.split("\n");
+        const tableContentStart = markdownLines.findIndex((l) => l.startsWith("#"));
+        const newTableContent = markdownLines.slice(tableContentStart).join("\n");
+        const newContent = currentContent + "\n\n" + newTableContent;
+        await this.app.vault.modify(this.currentFile, newContent);
+        new import_obsidian2.Notice(`Table added to ${this.currentFile.path}`);
+      }
+      this.hasUnsavedChanges = false;
+      await this.roller.loadTables();
+    } catch (error) {
+      console.error("Error saving to current file:", error);
+      new import_obsidian2.Notice("Failed to save to file");
+    }
+  }
   async exportAs(format) {
-    try {
-      let content = "";
-      switch (format) {
-        case "md":
-          content = this.generateMarkdown(this.state);
-          break;
-        case "csv":
-          content = this.generateCSV(this.state);
-          break;
-        case "json":
-          content = this.generateJSON(this.state);
-          break;
-      }
-      await navigator.clipboard.writeText(content);
-      new import_obsidian2.Notice(`${format.toUpperCase()} copied to clipboard`);
-      this.dispatchEvent(new CustomEvent("export-completed", {
-        detail: { format, content }
-      }));
-    } catch (error) {
-      console.error("Error exporting:", error);
-      new import_obsidian2.Notice("Failed to export table");
+    let content = "";
+    let extension = "";
+    if (format === "md") {
+      content = this.generateMarkdown();
+      extension = "md";
+    } else if (format === "csv") {
+      content = this.generateCSV();
+      extension = "csv";
+    } else if (format === "json") {
+      content = this.generateJSON();
+      extension = "json";
     }
+    await navigator.clipboard.writeText(content);
+    new import_obsidian2.Notice(`${format.toUpperCase()} copied to clipboard`);
   }
-  /**
-   * Save current table as a template
-   */
-  async saveTemplate(templateName) {
-    try {
-      const templatesFolder = ".table-templates";
-      const folder = this.app.vault.getAbstractFileByPath(templatesFolder);
-      if (!folder) {
-        await this.app.vault.createFolder(templatesFolder);
-      }
-      const templateState = {
-        tableName: templateName,
-        columns: JSON.parse(JSON.stringify(this.state.columns)),
-        rows: this.state.rows.map(() => ({})),
-        // Empty rows with same count
-        isPrivate: this.state.isPrivate,
-        tableReroll: this.state.tableReroll
-      };
-      const lines = [];
-      lines.push("---");
-      lines.push("table-roller-template: true");
-      lines.push("---");
-      lines.push("");
-      lines.push(`# ${templateName}`);
-      lines.push("");
-      lines.push("```json");
-      lines.push(JSON.stringify(templateState, null, 2));
-      lines.push("```");
-      const filename = `${templatesFolder}/${templateName}.md`;
-      await this.app.vault.create(filename, lines.join("\n"));
-      new import_obsidian2.Notice(`Template saved: ${templateName}`);
-      this.dispatchEvent(new CustomEvent("template-saved", {
-        detail: { filename, templateName }
-      }));
-    } catch (error) {
-      console.error("Error saving template:", error);
-      new import_obsidian2.Notice("Failed to save template");
-    }
-  }
-  /**
-   * Show save template dialog
-   */
-  async saveAsTemplate() {
-    return new Promise((resolve) => {
-      const modal = new import_obsidian2.Modal(this.app);
-      modal.titleEl.setText("Save as Template");
-      const input = modal.contentEl.createEl("input", {
-        type: "text",
-        placeholder: "Template name",
-        value: this.state.tableName + " Template"
+  generateCSV() {
+    const headers = this.state.columns.map((col) => col.name);
+    const lines = [headers.join(",")];
+    this.state.rows.forEach((row) => {
+      const cells = this.state.columns.map((col) => {
+        const key = col.type === "dice" ? "range" : col.name;
+        const value = row[key] || "";
+        return value.includes(",") || value.includes('"') ? `"${value.replace(/"/g, '""')}"` : value;
       });
-      input.style.width = "100%";
-      input.style.padding = "8px";
-      input.style.marginBottom = "12px";
-      const btnContainer = modal.contentEl.createDiv();
-      btnContainer.style.display = "flex";
-      btnContainer.style.justifyContent = "flex-end";
-      btnContainer.style.gap = "8px";
-      const cancelBtn = btnContainer.createEl("button", { text: "Cancel" });
-      cancelBtn.addEventListener("click", () => {
-        modal.close();
-        resolve();
-      });
-      const saveBtn = btnContainer.createEl("button", { text: "Save" });
-      saveBtn.addEventListener("click", async () => {
-        const templateName = input.value.trim();
-        if (!templateName) {
-          new import_obsidian2.Notice("Template name cannot be empty");
-          return;
-        }
-        await this.saveTemplate(templateName);
-        modal.close();
-        resolve();
-      });
-      input.addEventListener("keypress", (e) => {
-        if (e.key === "Enter") {
-          saveBtn.click();
-        }
-      });
-      modal.onClose = () => resolve();
-      modal.open();
-      input.focus();
+      lines.push(cells.join(","));
     });
+    return lines.join("\n");
   }
-  /**
-   * Load templates from .table-templates folder
-   */
-  async loadTemplates() {
-    const templatesFolder = ".table-templates";
-    const files = this.app.vault.getMarkdownFiles().filter((f) => f.path.startsWith(templatesFolder + "/"));
-    return files.map((file) => ({
-      name: file.basename,
-      file
-    }));
+  generateJSON() {
+    return JSON.stringify({
+      tableName: this.state.tableName,
+      isPrivate: this.state.isPrivate,
+      tableReroll: this.state.tableReroll,
+      columns: this.state.columns,
+      rows: this.state.rows
+    }, null, 2);
   }
-  /**
-   * Load a specific template
-   */
-  async loadTemplate(file) {
-    try {
-      const content = await this.app.vault.read(file);
-      const jsonMatch = content.match(/```json\n([\s\S]+?)\n```/);
-      if (!jsonMatch) {
-        new import_obsidian2.Notice("Invalid template format");
-        return null;
-      }
-      const templateState = JSON.parse(jsonMatch[1]);
-      new import_obsidian2.Notice(`Loaded template: ${templateState.tableName}`);
-      return templateState;
-    } catch (error) {
-      console.error("Error loading template:", error);
-      new import_obsidian2.Notice("Failed to load template");
-      return null;
-    }
-  }
-  /**
-   * Import table from clipboard (markdown format)
-   */
-  async importFromClipboard() {
-    try {
-      const text = await navigator.clipboard.readText();
-      const lines = text.split("\n").filter((l) => l.trim().includes("|"));
-      if (lines.length < 2) {
-        new import_obsidian2.Notice("No valid table found in clipboard");
-        return null;
-      }
-      const headerLine = lines[0];
-      const headers = headerLine.split("|").map((h) => h.trim()).filter((h) => h.length > 0);
-      if (headers.length === 0) {
-        new import_obsidian2.Notice("Could not parse table headers");
-        return null;
-      }
-      const columns = headers.map((h) => {
-        if (/^\d*d\d+$/i.test(h.trim())) {
-          return { name: h, type: "dice", diceNotation: h.toLowerCase() };
-        } else if (/^reroll$/i.test(h.trim())) {
-          return { name: h, type: "reroll" };
-        } else {
-          return { name: h, type: "regular" };
-        }
-      });
-      const rows = [];
-      for (let i = 2; i < lines.length; i++) {
-        const cells = lines[i].split("|").map((c) => c.trim()).filter((_, idx) => idx > 0 && idx <= headers.length);
-        if (cells.length > 0) {
-          const row = {};
-          headers.forEach((header, idx) => {
-            const col = columns[idx];
-            const key = col.type === "dice" ? "range" : col.name;
-            row[key] = cells[idx] || "";
-          });
-          rows.push(row);
-        }
-      }
-      new import_obsidian2.Notice("Table imported from clipboard");
-      return {
-        tableName: "Imported Table",
-        columns,
-        rows,
-        isPrivate: false
-      };
-    } catch (error) {
-      console.error("Import error:", error);
-      new import_obsidian2.Notice("Failed to import from clipboard");
-      return null;
-    }
-  }
-  /**
-   * Copy table to clipboard as markdown
-   */
-  async copyToClipboard() {
-    try {
-      const markdown = this.generateMarkdown(this.state);
-      await navigator.clipboard.writeText(markdown);
-      new import_obsidian2.Notice("Copied to clipboard");
-    } catch (error) {
-      console.error("Error copying to clipboard:", error);
-      new import_obsidian2.Notice("Failed to copy to clipboard");
-    }
-  }
-};
-
-// src/ui/validation/TableBuilderValidation.ts
-var TableValidator = class {
-  constructor(roller) {
-    this.roller = roller;
-  }
-  /**
-   * Validate complete table state
-   */
-  async validateTable(state) {
+  // Validation
+  async validate() {
     const errors = [];
-    this.validateTableName(state, errors);
-    await this.validateRerollReferences(state, errors);
-    await this.validateDiceRanges(state, errors);
-    return {
-      isValid: errors.length === 0,
-      errors
-    };
-  }
-  /**
-   * Validate table name is not empty
-   */
-  validateTableName(state, errors) {
-    if (!state.tableName.trim()) {
+    if (!this.state.tableName.trim()) {
       errors.push("Table name cannot be empty");
     }
-  }
-  /**
-   * Validate all reroll references (table-level and row-level)
-   */
-  async validateRerollReferences(state, errors) {
-    if (state.tableReroll) {
-      const valid = await this.validateRerollReference(state.tableReroll);
+    if (this.state.tableReroll) {
+      const valid = await this.validateRerollReference(this.state.tableReroll, true);
       if (!valid) {
-        errors.push(`Invalid table-level reroll reference: ${state.tableReroll}`);
+        errors.push(`Invalid table-level reroll reference: ${this.state.tableReroll}`);
       }
     }
-    const rerollCol = state.columns.find((c) => c.type === "reroll");
+    const rerollCol = this.state.columns.find((c) => c.type === "reroll");
     if (rerollCol) {
-      for (const row of state.rows) {
+      for (const row of this.state.rows) {
         const rerollValue = row[rerollCol.name];
         if (rerollValue && rerollValue !== "\u2014" && rerollValue !== "-") {
-          const valid = await this.validateRerollReference(rerollValue);
+          const valid = await this.validateRerollReference(rerollValue, true);
           if (!valid) {
             errors.push(`Invalid reroll reference: ${rerollValue}`);
           }
         }
       }
     }
+    const diceCol = this.state.columns.find((c) => c.type === "dice");
+    if (diceCol) {
+      const ranges = [];
+      for (const row of this.state.rows) {
+        const range = row.range;
+        if (range) {
+          const parsed = TableParser["parseRange"](range);
+          if (parsed.min === 0 && parsed.max === 0) {
+            errors.push(`Invalid range format: ${range}`);
+          } else {
+            ranges.push({ min: parsed.min, max: parsed.max, raw: range });
+          }
+        }
+      }
+      for (let i = 0; i < ranges.length; i++) {
+        for (let j = i + 1; j < ranges.length; j++) {
+          const r1 = ranges[i];
+          const r2 = ranges[j];
+          if (r1.min <= r2.max && r2.min <= r1.max) {
+            errors.push(`Duplicate or overlapping ranges: ${r1.raw} and ${r2.raw}`);
+          }
+        }
+      }
+      if (diceCol.diceNotation && ranges.length > 0) {
+        const match = diceCol.diceNotation.match(/(\d*)d(\d+)/i);
+        if (match) {
+          const numDice = match[1] ? parseInt(match[1]) : 1;
+          const sides = parseInt(match[2]);
+          if (numDice === 1) {
+            const sortedRanges = [...ranges].sort((a, b) => a.min - b.min);
+            if (sortedRanges[0].min !== 1) {
+              errors.push(`Dice ranges should start at 1 (found: ${sortedRanges[0].min})`);
+            }
+            const lastRange = sortedRanges[sortedRanges.length - 1];
+            if (lastRange.max !== sides) {
+              errors.push(`Dice ranges should end at ${sides} for ${diceCol.diceNotation} (found: ${lastRange.max})`);
+            }
+            const hasOverlaps = ranges.some(
+              (r1, i) => ranges.some((r2, j) => i !== j && r1.min <= r2.max && r2.min <= r1.max)
+            );
+            if (!hasOverlaps) {
+              for (let i = 0; i < sortedRanges.length - 1; i++) {
+                const current = sortedRanges[i];
+                const next = sortedRanges[i + 1];
+                if (current.max + 1 !== next.min) {
+                  errors.push(`Gap in dice ranges between ${current.raw} and ${next.raw}`);
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+    if (errors.length > 0) {
+      const modal = new import_obsidian2.Modal(this.app);
+      modal.titleEl.setText("Validation Errors");
+      modal.contentEl.createEl("p", { text: "Please fix the following errors:" });
+      const list = modal.contentEl.createEl("ul");
+      errors.forEach((error) => {
+        list.createEl("li", { text: error });
+      });
+      const closeBtn = modal.contentEl.createEl("button", { text: "OK" });
+      closeBtn.addEventListener("click", () => modal.close());
+      modal.open();
+      return false;
+    }
+    return true;
   }
-  /**
-   * Validate a single reroll reference (can be comma-separated list)
-   */
-  async validateRerollReference(reference) {
+  async validateRerollReference(reference, silent = false) {
     const tableNames = reference.split(",").map((t) => t.trim()).filter((t) => t);
     for (const name of tableNames) {
       const multiRollMatch = name.match(/^(\d*d\d+)\s+(.+)$/i);
@@ -1895,1255 +2470,337 @@ var TableValidator = class {
       try {
         const tableFile = this.roller.getTableFile(actualTableName);
         if (!tableFile) {
+          if (!silent) {
+            new import_obsidian2.Notice(`Table not found: ${actualTableName}`);
+          }
           return false;
         }
       } catch (error) {
+        if (!silent) {
+          const errorMsg = error instanceof Error ? error.message : String(error);
+          new import_obsidian2.Notice(errorMsg);
+        }
         return false;
       }
     }
     return true;
   }
-  /**
-   * Validate dice column ranges
-   */
-  async validateDiceRanges(state, errors) {
-    const diceCol = state.columns.find((c) => c.type === "dice");
-    if (!diceCol) {
-      return;
-    }
-    const ranges = [];
-    for (const row of state.rows) {
-      const range = row.range;
-      if (range) {
-        const parsed = this.parseRange(range);
-        if (parsed.min === 0 && parsed.max === 0) {
-          errors.push(`Invalid range format: ${range}`);
-        } else {
-          ranges.push({ min: parsed.min, max: parsed.max, raw: range });
-        }
-      }
-    }
-    this.checkRangeOverlaps(ranges, errors);
-    if (diceCol.diceNotation && ranges.length > 0) {
-      this.checkRangeCoverage(diceCol.diceNotation, ranges, errors);
-    }
-  }
-  /**
-   * Parse a range string into min and max values
-   */
-  parseRange(rangeStr) {
-    if (!rangeStr)
-      return { min: 0, max: 0 };
-    const trimmed = rangeStr.trim();
-    if (/^\d+$/.test(trimmed)) {
-      const num = parseInt(trimmed);
-      return { min: num, max: num };
-    }
-    const rangeMatch = trimmed.match(/^(\d+)[\-\u2013\u2014](\d+)$/);
-    if (rangeMatch) {
-      return {
-        min: parseInt(rangeMatch[1]),
-        max: parseInt(rangeMatch[2])
-      };
-    }
-    return { min: 0, max: 0 };
-  }
-  /**
-   * Check for duplicate or overlapping ranges
-   */
-  checkRangeOverlaps(ranges, errors) {
-    for (let i = 0; i < ranges.length; i++) {
-      for (let j = i + 1; j < ranges.length; j++) {
-        const r1 = ranges[i];
-        const r2 = ranges[j];
-        if (r1.min <= r2.max && r2.min <= r1.max) {
-          errors.push(`Duplicate or overlapping ranges: ${r1.raw} and ${r2.raw}`);
-        }
-      }
-    }
-  }
-  /**
-   * Check if ranges properly cover the expected dice values
-   */
-  checkRangeCoverage(diceNotation, ranges, errors) {
-    const match = diceNotation.match(/(\d*)d(\d+)/i);
-    if (!match) {
-      return;
-    }
-    const numDice = match[1] ? parseInt(match[1]) : 1;
-    const sides = parseInt(match[2]);
-    if (numDice === 1) {
-      const sortedRanges = [...ranges].sort((a, b) => a.min - b.min);
-      if (sortedRanges[0].min !== 1) {
-        errors.push(`Dice ranges should start at 1 (found: ${sortedRanges[0].min})`);
-      }
-      const lastRange = sortedRanges[sortedRanges.length - 1];
-      if (lastRange.max !== sides) {
-        errors.push(
-          `Dice ranges should end at ${sides} for ${diceNotation} (found: ${lastRange.max})`
-        );
-      }
-      const hasOverlaps = this.hasOverlaps(ranges);
-      if (!hasOverlaps) {
-        for (let i = 0; i < sortedRanges.length - 1; i++) {
-          const current = sortedRanges[i];
-          const next = sortedRanges[i + 1];
-          if (current.max + 1 !== next.min) {
-            errors.push(`Gap in dice ranges between ${current.raw} and ${next.raw}`);
-          }
-        }
-      }
-    }
-  }
-  /**
-   * Check if there are any overlapping ranges
-   */
-  hasOverlaps(ranges) {
-    return ranges.some(
-      (r1, i) => ranges.some((r2, j) => i !== j && r1.min <= r2.max && r2.min <= r1.max)
-    );
-  }
-};
-
-// src/ui/components/ColumnsEditor.ts
-var import_obsidian3 = require("obsidian");
-var ColumnsEditor = class {
-  constructor(app, container, initialState) {
-    this.columnsList = null;
-    this.draggedColumnIndex = -1;
-    this.app = app;
-    this.container = container;
-    this.state = initialState;
-  }
-  /**
-   * Updates the component state and re-renders
-   */
-  updateState(newState) {
-    this.state = newState;
-    this.render();
-  }
-  /**
-   * Renders the columns editor UI
-   */
-  render() {
-    this.container.empty();
-    this.columnsList = this.container.createDiv({ cls: "columns-list" });
-    this.state.columns.forEach((col, index) => {
-      this.renderColumnItem(col, index);
-    });
-    this.renderAddButtons();
-  }
-  /**
-   * Renders a single column item
-   */
-  renderColumnItem(col, index) {
-    if (!this.columnsList)
-      return;
-    const colItem = this.columnsList.createDiv({ cls: "column-item" });
-    const dragHandle = colItem.createDiv({ cls: "drag-handle", text: "\u22EE\u22EE" });
-    dragHandle.draggable = true;
-    dragHandle.addEventListener("dragstart", (e) => this.onColumnDragStart(e, index));
-    dragHandle.addEventListener("dragover", (e) => this.onColumnDragOver(e));
-    dragHandle.addEventListener("drop", (e) => this.onColumnDrop(e, index));
-    const nameInput = colItem.createEl("input", {
-      type: "text",
-      value: col.name,
-      placeholder: "Column name"
-    });
-    if (col.type === "reroll") {
-      nameInput.disabled = true;
-      nameInput.style.opacity = "0.6";
-      nameInput.style.cursor = "not-allowed";
-    }
-    nameInput.addEventListener("input", () => {
-      const updatedColumn = {
-        ...col,
-        name: nameInput.value
-      };
-      if (col.type === "dice") {
-        updatedColumn.diceNotation = nameInput.value;
-      }
-      this.dispatchColumnUpdated(index, updatedColumn);
-    });
-    colItem.createSpan({ text: `(${col.type})`, cls: "column-type" });
-    if (col.type === "dice" && col.diceNotation) {
-      const generateBtn = colItem.createEl("button", {
-        text: "Generate Rows...",
-        cls: "table-builder-btn-small"
-      });
-      generateBtn.style.marginLeft = "8px";
-      generateBtn.addEventListener("click", () => {
-        this.dispatchGenerateRowsRequested(col.diceNotation);
-      });
-    }
-    if (this.state.columns.length > 1) {
-      const deleteBtn = colItem.createEl("button", { text: "\xD7", cls: "delete-btn" });
-      deleteBtn.addEventListener("click", () => this.deleteColumn(index));
-    }
-  }
-  /**
-   * Renders add column buttons
-   */
-  renderAddButtons() {
-    const addBtns = this.container.createDiv({ cls: "add-column-btns" });
-    const hasDiceColumn = this.state.columns.some((c) => c.type === "dice");
-    if (!hasDiceColumn) {
-      const addDiceBtn = addBtns.createEl("button", {
-        text: "+ Dice Column",
-        cls: "table-builder-btn"
-      });
-      addDiceBtn.addEventListener("click", () => this.showAddDiceColumnModal());
-    }
-    const addRegularBtn = addBtns.createEl("button", {
-      text: "+ Regular Column",
-      cls: "table-builder-btn"
-    });
-    addRegularBtn.addEventListener("click", () => this.addColumn("regular"));
-    const hasRerollColumn = this.state.columns.some((c) => c.type === "reroll");
-    if (!hasRerollColumn) {
-      const addRerollBtn = addBtns.createEl("button", {
-        text: "+ Reroll Column",
-        cls: "table-builder-btn"
-      });
-      addRerollBtn.addEventListener("click", () => this.addColumn("reroll"));
-    }
-  }
-  /**
-   * Shows modal for adding a dice column
-   */
-  showAddDiceColumnModal() {
-    if (this.state.columns.some((c) => c.type === "dice")) {
-      new import_obsidian3.Notice("Only one dice column is allowed");
-      return;
-    }
-    const modal = new import_obsidian3.Modal(this.app);
-    modal.titleEl.setText("Add Dice Column");
-    modal.contentEl.createEl("label", { text: "Select dice type:" });
-    const select = modal.contentEl.createEl("select");
-    select.style.width = "100%";
-    select.style.padding = "8px";
-    select.style.marginTop = "8px";
-    select.style.marginBottom = "12px";
-    const diceOptions = ["d4", "d6", "d8", "d10", "d12", "d20", "d100", "custom"];
-    diceOptions.forEach((dice) => {
-      select.createEl("option", {
-        text: dice === "custom" ? "Custom..." : dice,
-        value: dice
-      });
-    });
-    const customContainer = modal.contentEl.createDiv();
-    customContainer.style.marginBottom = "12px";
-    customContainer.style.display = "none";
-    customContainer.createEl("label", { text: "Custom dice notation (e.g., d6, 2d6, d100):" });
-    const customInput = customContainer.createEl("input", {
-      type: "text",
-      placeholder: "d6"
-    });
-    customInput.style.width = "100%";
-    customInput.style.padding = "8px";
-    customInput.style.marginTop = "4px";
-    select.addEventListener("change", () => {
-      if (select.value === "custom") {
-        customContainer.style.display = "block";
-        customInput.focus();
-      } else {
-        customContainer.style.display = "none";
-      }
-    });
-    const btnContainer = modal.contentEl.createDiv();
-    btnContainer.style.display = "flex";
-    btnContainer.style.justifyContent = "flex-end";
-    btnContainer.style.gap = "8px";
-    const cancelBtn = btnContainer.createEl("button", { text: "Cancel" });
-    cancelBtn.addEventListener("click", () => modal.close());
-    const addBtn = btnContainer.createEl("button", { text: "Add" });
-    addBtn.addEventListener("click", () => {
-      let diceType = select.value;
-      if (diceType === "custom") {
-        diceType = customInput.value.trim().toLowerCase();
-        if (!diceType) {
-          new import_obsidian3.Notice("Please enter a dice notation");
-          return;
-        }
-        if (!/^\d*d\d+$/.test(diceType)) {
-          new import_obsidian3.Notice("Invalid dice notation. Use format like: d6, 2d6, d100");
-          return;
-        }
-      }
-      const newColumn = {
-        name: diceType,
-        type: "dice",
-        diceNotation: diceType
-      };
-      this.dispatchColumnAdded(newColumn, 0);
-      modal.close();
-    });
-    modal.open();
-  }
-  /**
-   * Adds a regular or reroll column
-   */
-  addColumn(type) {
-    if (type === "reroll" && this.state.columns.some((c) => c.type === "reroll")) {
-      new import_obsidian3.Notice("Only one reroll column is allowed");
-      return;
-    }
-    const name = type === "reroll" ? "reroll" : `Column ${this.state.columns.length}`;
-    const newColumn = { name, type };
-    this.dispatchColumnAdded(newColumn, this.state.columns.length);
-  }
-  /**
-   * Deletes a column
-   */
-  deleteColumn(index) {
-    if (this.state.columns.length <= 1) {
-      new import_obsidian3.Notice("Cannot delete the last column");
-      return;
-    }
-    const col = this.state.columns[index];
-    this.dispatchColumnRemoved(col.name, index);
-  }
-  // Drag and drop handlers
-  onColumnDragStart(e, index) {
-    this.draggedColumnIndex = index;
-    if (e.dataTransfer) {
-      e.dataTransfer.effectAllowed = "move";
-    }
-  }
-  onColumnDragOver(e) {
-    e.preventDefault();
-    if (e.dataTransfer) {
-      e.dataTransfer.dropEffect = "move";
-    }
-  }
-  onColumnDrop(e, targetIndex) {
-    e.preventDefault();
-    if (this.draggedColumnIndex === targetIndex)
-      return;
-    this.dispatchColumnReordered(this.draggedColumnIndex, targetIndex);
-    this.draggedColumnIndex = -1;
-  }
-  // Event dispatchers
-  dispatchColumnAdded(column, index) {
-    const event = new CustomEvent("column-added", {
-      detail: { column, index },
-      bubbles: true
-    });
-    this.container.dispatchEvent(event);
-  }
-  dispatchColumnRemoved(columnName, index) {
-    const event = new CustomEvent("column-removed", {
-      detail: { columnName, index },
-      bubbles: true
-    });
-    this.container.dispatchEvent(event);
-  }
-  dispatchColumnReordered(fromIndex, toIndex) {
-    const event = new CustomEvent("column-reordered", {
-      detail: { fromIndex, toIndex },
-      bubbles: true
-    });
-    this.container.dispatchEvent(event);
-  }
-  dispatchColumnUpdated(index, column) {
-    const event = new CustomEvent("column-updated", {
-      detail: { index, column },
-      bubbles: true
-    });
-    this.container.dispatchEvent(event);
-  }
-  dispatchGenerateRowsRequested(diceNotation) {
-    const event = new CustomEvent("generate-rows-requested", {
-      detail: { diceNotation },
-      bubbles: true
-    });
-    this.container.dispatchEvent(event);
-  }
-  /**
-   * Cleanup method to remove event listeners
-   */
-  destroy() {
-    this.container.empty();
-    this.columnsList = null;
-  }
-};
-
-// src/ui/components/RowGridEditor.ts
-var RowGridEditor = class {
-  constructor(container, initialState) {
-    this.selectedRowIndex = 0;
-    this.activeContextMenu = null;
-    this.activeMenuCloseListener = null;
-    this.container = container;
-    this.state = initialState;
-  }
-  /**
-   * Updates the component state and re-renders
-   */
-  updateState(newState, selectedRowIndex) {
-    this.state = newState;
-    if (selectedRowIndex !== void 0) {
-      this.selectedRowIndex = selectedRowIndex;
-    }
-    this.render();
-  }
-  /**
-   * Gets the currently selected row index
-   */
-  getSelectedRowIndex() {
-    return this.selectedRowIndex;
-  }
-  /**
-   * Renders the row grid UI
-   */
-  render() {
-    this.container.empty();
-    if (this.state.rows.length === 0) {
-      this.container.createDiv({
-        text: 'No rows yet. Click "+ Add Row" to start.',
-        cls: "empty-state"
-      });
-      return;
-    }
-    this.renderHeaderRow();
-    this.state.rows.forEach((row, rowIndex) => {
-      this.renderDataRow(row, rowIndex);
-    });
-  }
-  /**
-   * Renders the header row with column names
-   */
-  renderHeaderRow() {
-    const headerRow = this.container.createDiv({ cls: "row-grid-header" });
-    headerRow.createDiv({ text: "", cls: "row-number" });
-    this.state.columns.forEach((col, colIndex) => {
-      const headerCell = headerRow.createDiv({ text: col.name, cls: "grid-cell" });
-      headerCell.addEventListener("contextmenu", (e) => {
-        e.preventDefault();
-        this.dispatchColumnPasteRequested(colIndex, e.clientX, e.clientY);
-      });
-      headerCell.style.cursor = "context-menu";
-    });
-    headerRow.createDiv({ cls: "row-actions" });
-  }
-  /**
-   * Renders a single data row
-   */
-  renderDataRow(row, rowIndex) {
-    const rowEl = this.container.createDiv({ cls: "row-grid-row" });
-    if (rowIndex === this.selectedRowIndex) {
-      rowEl.addClass("selected");
-    }
-    const rowNum = rowEl.createDiv({ text: `${rowIndex + 1}`, cls: "row-number" });
-    rowNum.addEventListener("click", () => {
-      this.selectedRowIndex = rowIndex;
-      this.updateRowSelection();
-      this.dispatchRowSelectionChanged(rowIndex);
-    });
-    this.state.columns.forEach((col, colIndex) => {
-      const cellKey = col.type === "dice" ? "range" : col.name;
-      const cellValue = row[cellKey] || "";
-      const cell = rowEl.createDiv({ cls: "grid-cell" });
-      const input = cell.createEl("input", {
-        type: "text",
-        value: cellValue,
-        placeholder: col.type === "dice" ? "1-6" : "Value"
-      });
-      input.addEventListener("focus", () => {
-        if (this.selectedRowIndex !== rowIndex) {
-          this.selectedRowIndex = rowIndex;
-          this.updateRowSelection();
-          this.dispatchRowSelectionChanged(rowIndex);
-        }
-      });
-      input.addEventListener("input", () => {
-        this.dispatchRowUpdated(rowIndex, cellKey, input.value);
-      });
-      input.addEventListener("keydown", (e) => {
-        this.handleCellKeydown(e, rowIndex, colIndex);
-      });
-    });
-    const actionsCell = rowEl.createDiv({ cls: "row-actions" });
-    const duplicateBtn = actionsCell.createEl("button", {
-      text: "\u{1F4CB}",
-      cls: "row-action-btn",
-      attr: { "aria-label": "Duplicate row", "title": "Duplicate row" }
-    });
-    duplicateBtn.addEventListener("click", (e) => {
-      e.stopPropagation();
-      this.dispatchRowDuplicated(rowIndex, rowIndex + 1);
-    });
-    const deleteBtn = actionsCell.createEl("button", {
-      text: "\u2715",
-      cls: "row-action-btn row-delete-btn",
-      attr: { "aria-label": "Delete row", "title": "Delete row" }
-    });
-    deleteBtn.addEventListener("click", (e) => {
-      e.stopPropagation();
-      this.dispatchRowDeleted(rowIndex);
-    });
-  }
-  /**
-   * Handles keyboard navigation in grid cells
-   */
-  handleCellKeydown(e, rowIndex, colIndex) {
-    const rows = this.state.rows.length;
-    const cols = this.state.columns.length;
-    let newRow = rowIndex;
-    let newCol = colIndex;
-    let shouldMove = false;
-    if (e.key === "Tab") {
-      e.preventDefault();
-      if (e.shiftKey) {
-        newCol--;
-        if (newCol < 0) {
-          newCol = cols - 1;
-          newRow--;
-        }
-      } else {
-        newCol++;
-        if (newCol >= cols) {
-          newCol = 0;
-          newRow++;
-        }
-      }
-      shouldMove = true;
-    } else if (e.key === "Enter") {
-      e.preventDefault();
-      if (e.shiftKey) {
-        newRow--;
-      } else {
-        newRow++;
-      }
-      shouldMove = true;
-    }
-    if (shouldMove && newRow >= 0 && newRow < rows && newCol >= 0 && newCol < cols) {
-      this.selectedRowIndex = newRow;
-      this.dispatchRowSelectionChanged(newRow);
-      setTimeout(() => {
-        const rowEls = this.container.querySelectorAll(".row-grid-row");
-        const rowEl = rowEls[newRow];
-        if (rowEl) {
-          const inputs = rowEl.querySelectorAll("input");
-          const input = inputs[newCol];
-          if (input) {
-            input.focus();
-            input.select();
-          }
-        }
-      }, 0);
-    }
-  }
-  /**
-   * Updates row selection visuals without rebuilding
-   */
-  updateRowSelection() {
-    const rowEls = this.container.querySelectorAll(".row-grid-row");
-    rowEls.forEach((el, idx) => {
-      if (idx === this.selectedRowIndex) {
-        el.addClass("selected");
-      } else {
-        el.removeClass("selected");
-      }
-    });
-  }
-  // Event dispatchers
-  dispatchRowAdded(index) {
-    const event = new CustomEvent("row-added", {
-      detail: { index },
-      bubbles: true
-    });
-    this.container.dispatchEvent(event);
-  }
-  dispatchRowDuplicated(sourceIndex, newIndex) {
-    const event = new CustomEvent("row-duplicated", {
-      detail: { sourceIndex, newIndex },
-      bubbles: true
-    });
-    this.container.dispatchEvent(event);
-  }
-  dispatchRowDeleted(index) {
-    const event = new CustomEvent("row-deleted", {
-      detail: { index },
-      bubbles: true
-    });
-    this.container.dispatchEvent(event);
-  }
-  dispatchRowUpdated(rowIndex, columnKey, value) {
-    const event = new CustomEvent("row-updated", {
-      detail: { rowIndex, columnKey, value },
-      bubbles: true
-    });
-    this.container.dispatchEvent(event);
-  }
-  dispatchRowSelectionChanged(rowIndex) {
-    const event = new CustomEvent("row-selection-changed", {
-      detail: { rowIndex },
-      bubbles: true
-    });
-    this.container.dispatchEvent(event);
-  }
-  dispatchColumnPasteRequested(columnIndex, clientX, clientY) {
-    const event = new CustomEvent("column-paste-requested", {
-      detail: { columnIndex, clientX, clientY },
-      bubbles: true
-    });
-    this.container.dispatchEvent(event);
-  }
-  /**
-   * Cleanup method to remove event listeners
-   */
-  destroy() {
-    if (this.activeContextMenu && this.activeContextMenu.parentNode) {
-      try {
-        this.activeContextMenu.parentNode.removeChild(this.activeContextMenu);
-      } catch (e) {
-      }
-    }
-    if (this.activeMenuCloseListener) {
-      document.removeEventListener("click", this.activeMenuCloseListener);
-      this.activeMenuCloseListener = null;
-    }
-    this.container.empty();
-  }
-};
-
-// src/ui/components/PreviewPanel.ts
-var PreviewPanel = class {
-  constructor(container, initialState) {
-    this.markdownPreview = null;
-    this.htmlPreview = null;
-    this.activeTab = "markdown";
-    this.container = container;
-    this.state = initialState;
-  }
-  /**
-   * Updates the component state and re-renders
-   */
-  updateState(newState) {
-    this.state = newState;
-    this.updatePreview();
-  }
-  /**
-   * Renders the preview panel UI
-   */
-  render() {
-    this.container.empty();
-    const tabs = this.container.createDiv({ cls: "preview-tabs" });
-    const markdownTab = tabs.createEl("button", {
-      text: "Markdown",
-      cls: "tab-btn" + (this.activeTab === "markdown" ? " active" : "")
-    });
-    const htmlTab = tabs.createEl("button", {
-      text: "Preview",
-      cls: "tab-btn" + (this.activeTab === "html" ? " active" : "")
-    });
-    markdownTab.addEventListener("click", () => {
-      this.activeTab = "markdown";
-      markdownTab.addClass("active");
-      htmlTab.removeClass("active");
-      if (this.markdownPreview)
-        this.markdownPreview.addClass("active");
-      if (this.htmlPreview)
-        this.htmlPreview.removeClass("active");
-    });
-    htmlTab.addEventListener("click", () => {
-      this.activeTab = "html";
-      htmlTab.addClass("active");
-      markdownTab.removeClass("active");
-      if (this.htmlPreview)
-        this.htmlPreview.addClass("active");
-      if (this.markdownPreview)
-        this.markdownPreview.removeClass("active");
-    });
-    const previewContainer = this.container.createDiv({ cls: "preview-container" });
-    this.markdownPreview = previewContainer.createDiv({
-      cls: "markdown-preview" + (this.activeTab === "markdown" ? " active" : "")
-    });
-    this.htmlPreview = previewContainer.createDiv({
-      cls: "html-preview" + (this.activeTab === "html" ? " active" : "")
-    });
-    this.renderExportButtons();
-    this.updatePreview();
-  }
-  /**
-   * Renders export and action buttons
-   */
-  renderExportButtons() {
-    const exportBtns = this.container.createDiv({ cls: "export-buttons" });
-    const copyBtn = exportBtns.createEl("button", {
-      text: "Copy to Clipboard",
-      cls: "table-builder-btn"
-    });
-    copyBtn.addEventListener("click", () => this.handleCopyToClipboard());
-    const saveBtn = exportBtns.createEl("button", {
-      text: "Save",
-      cls: "table-builder-btn"
-    });
-    saveBtn.addEventListener("click", () => this.dispatchSaveRequested(false));
-    const saveAsBtn = exportBtns.createEl("button", {
-      text: "Save As...",
-      cls: "table-builder-btn"
-    });
-    saveAsBtn.addEventListener("click", () => this.dispatchSaveRequested(true));
-    const loadBtn = exportBtns.createEl("button", {
-      text: "Load Table",
-      cls: "table-builder-btn"
-    });
-    loadBtn.addEventListener("click", () => this.dispatchLoadRequested());
-    const importBtn = exportBtns.createEl("button", {
-      text: "Import from Clipboard",
-      cls: "table-builder-btn"
-    });
-    importBtn.addEventListener("click", () => this.dispatchImportFromClipboard());
-    const exportDropdown = exportBtns.createEl("select", { cls: "export-format" });
-    exportDropdown.createEl("option", { text: "Markdown", value: "md" });
-    exportDropdown.createEl("option", { text: "CSV", value: "csv" });
-    exportDropdown.createEl("option", { text: "JSON", value: "json" });
-    const exportFileBtn = exportBtns.createEl("button", {
-      text: "Export As...",
-      cls: "table-builder-btn"
-    });
-    exportFileBtn.addEventListener("click", () => {
-      const format = exportDropdown.value;
-      this.dispatchExportRequested(format);
-    });
-  }
-  /**
-   * Updates the preview content
-   */
-  updatePreview() {
-    if (!this.markdownPreview || !this.htmlPreview)
-      return;
-    this.markdownPreview.empty();
-    const markdown = generateMarkdown(this.state);
-    const pre = this.markdownPreview.createEl("pre");
-    pre.createEl("code", { text: markdown });
-    this.htmlPreview.empty();
-    this.renderHTMLPreview(this.htmlPreview);
-  }
-  /**
-   * Renders HTML preview of the table
-   */
-  renderHTMLPreview(container) {
-    container.createEl("h2", { text: this.state.tableName });
-    if (this.state.isPrivate || this.state.tableReroll) {
-      const info = container.createDiv({ cls: "directives-info" });
-      if (this.state.isPrivate) {
-        info.createSpan({ text: "\u{1F512} Private", cls: "badge" });
-      }
-      if (this.state.tableReroll) {
-        info.createSpan({ text: `\u21BB Rerolls: ${this.state.tableReroll}`, cls: "badge" });
-      }
-    }
-    const table = container.createEl("table", { cls: "preview-table" });
-    const thead = table.createEl("thead");
-    const headerRow = thead.createEl("tr");
-    this.state.columns.forEach((col) => {
-      headerRow.createEl("th", { text: col.name });
-    });
-    const tbody = table.createEl("tbody");
-    this.state.rows.forEach((row) => {
-      const tr = tbody.createEl("tr");
-      this.state.columns.forEach((col) => {
-        const key = col.type === "dice" ? "range" : col.name;
-        tr.createEl("td", { text: row[key] || "" });
-      });
-    });
-  }
-  /**
-   * Handles copy to clipboard action
-   */
-  handleCopyToClipboard() {
-    const markdown = generateMarkdown(this.state);
-    this.dispatchCopyToClipboard(markdown);
-  }
-  // Event dispatchers
-  dispatchCopyToClipboard(content) {
-    const event = new CustomEvent("copy-to-clipboard", {
-      detail: { content },
-      bubbles: true
-    });
-    this.container.dispatchEvent(event);
-  }
-  dispatchSaveRequested(saveAs) {
-    const event = new CustomEvent("save-requested", {
-      detail: { saveAs },
-      bubbles: true
-    });
-    this.container.dispatchEvent(event);
-  }
-  dispatchExportRequested(format) {
-    const event = new CustomEvent("export-requested", {
-      detail: { format },
-      bubbles: true
-    });
-    this.container.dispatchEvent(event);
-  }
-  dispatchLoadRequested() {
-    const event = new CustomEvent("load-requested", {
-      detail: {},
-      bubbles: true
-    });
-    this.container.dispatchEvent(event);
-  }
-  dispatchImportFromClipboard() {
-    const event = new CustomEvent("import-from-clipboard", {
-      detail: {},
-      bubbles: true
-    });
-    this.container.dispatchEvent(event);
-  }
-  /**
-   * Cleanup method to remove event listeners
-   */
-  destroy() {
-    this.container.empty();
-    this.markdownPreview = null;
-    this.htmlPreview = null;
-  }
-};
-
-// src/ui/modals/TableBuilderModals.ts
-var import_obsidian4 = require("obsidian");
-var ConfirmModal = class extends import_obsidian4.Modal {
-  constructor(app, title, message, onConfirm, options) {
-    super(app);
-    this.title = title;
-    this.message = message;
-    this.onConfirm = onConfirm;
-    this.confirmText = (options == null ? void 0 : options.confirmText) || "Confirm";
-    this.cancelText = (options == null ? void 0 : options.cancelText) || "Cancel";
-    this.isDangerous = (options == null ? void 0 : options.isDangerous) || false;
-  }
-  onOpen() {
-    const { contentEl, titleEl } = this;
-    titleEl.setText(this.title);
-    contentEl.createEl("p", { text: this.message });
-    const btnContainer = contentEl.createDiv({ cls: "modal-button-container" });
-    const cancelBtn = btnContainer.createEl("button", { text: this.cancelText });
-    cancelBtn.addClass("table-builder-btn");
-    cancelBtn.addEventListener("click", () => this.close());
-    const confirmBtn = btnContainer.createEl("button", { text: this.confirmText });
-    confirmBtn.addClass("table-builder-btn");
-    if (this.isDangerous) {
-      confirmBtn.addClass("mod-warning");
-    }
-    confirmBtn.addEventListener("click", () => {
-      this.onConfirm();
-      this.close();
-    });
-  }
-  onClose() {
-    const { contentEl } = this;
-    contentEl.empty();
-  }
-};
-
-// src/ui/TableBuilderView.ts
-var VIEW_TYPE_TABLE_BUILDER = "table-builder";
-function getDefaultState() {
-  return {
-    tableName: "New Table",
-    columns: [
-      { name: "d6", type: "dice", diceNotation: "d6" },
-      { name: "Result", type: "regular" }
-    ],
-    rows: generateDefaultRows("d6", 6),
-    isPrivate: false
-  };
-}
-var TableBuilderView = class extends import_obsidian5.ItemView {
-  constructor(leaf, roller) {
-    super(leaf);
-    // UI components
-    this.columnsEditor = null;
-    this.rowGridEditor = null;
-    this.previewPanel = null;
-    // UI containers
-    this.leftPanel = null;
-    this.rightPanel = null;
-    this.tableNameInput = null;
-    // State flags
-    this.hasUnsavedChanges = false;
-    this.currentFile = null;
-    this.previewDebounceTimer = null;
-    this.roller = roller;
-    this.parser = new TableParser();
-    this.stateManager = new StateManager(getDefaultState());
-    this.tableIO = new TableIO(this.app, this.currentFile, this.parser);
-    this.validator = new TableValidator(this.roller);
-  }
-  getViewType() {
-    return VIEW_TYPE_TABLE_BUILDER;
-  }
-  getDisplayText() {
-    const asterisk = this.hasUnsavedChanges ? "*" : "";
-    return `Table Builder${asterisk}`;
-  }
-  getIcon() {
-    return "table";
-  }
-  async onOpen() {
-    const container = this.containerEl.children[1];
-    container.empty();
-    container.addClass("table-builder-view");
-    const splitContainer = container.createDiv({ cls: "table-builder-split" });
-    this.leftPanel = splitContainer.createDiv({ cls: "table-builder-left-panel" });
-    this.rightPanel = splitContainer.createDiv({ cls: "table-builder-right-panel" });
-    this.buildLeftPanel();
-    this.buildRightPanel();
-    this.setupEventListeners();
-  }
-  async onClose() {
-    if (this.hasUnsavedChanges) {
-      console.warn("TableBuilder: Closing with unsaved changes");
-    }
-    this.columnsEditor = null;
-    this.rowGridEditor = null;
-    this.previewPanel = null;
-    if (this.previewDebounceTimer) {
-      clearTimeout(this.previewDebounceTimer);
-      this.previewDebounceTimer = null;
-    }
-  }
-  /**
-   * Builds the left panel with toolbar, table name, columns, directives, and rows
-   */
-  buildLeftPanel() {
-    if (!this.leftPanel)
-      return;
-    const toolbar = this.leftPanel.createDiv({ cls: "table-builder-toolbar" });
-    this.buildToolbar(toolbar);
-    const nameSection = this.leftPanel.createDiv({ cls: "table-builder-section" });
-    nameSection.createEl("label", { text: "Table Name:" });
-    this.tableNameInput = nameSection.createEl("input", {
-      type: "text",
-      value: this.stateManager.getState().tableName,
-      cls: "table-builder-input"
-    });
-    this.tableNameInput.addEventListener("input", () => this.handleTableNameChange());
-    const columnsSection = this.leftPanel.createDiv({ cls: "table-builder-section" });
-    columnsSection.createEl("h3", { text: "Columns" });
-    const columnsContainer = columnsSection.createDiv();
-    this.columnsEditor = new ColumnsEditor(this.app, columnsContainer, this.stateManager.getState());
-    this.columnsEditor.render();
-    const directivesSection = this.leftPanel.createDiv({ cls: "table-builder-section" });
-    directivesSection.createEl("h3", { text: "Directives" });
-    this.buildDirectivesEditor(directivesSection);
-    const rowsSection = this.leftPanel.createDiv({ cls: "table-builder-section" });
-    rowsSection.createEl("h3", { text: "Rows" });
-    const rowsContainer = rowsSection.createDiv();
-    this.rowGridEditor = new RowGridEditor(rowsContainer, this.stateManager.getState());
-    this.rowGridEditor.render();
-    const addRowBtn = rowsSection.createEl("button", {
-      text: "+ Add Row",
-      cls: "table-builder-btn"
-    });
-    addRowBtn.addEventListener("click", () => this.handleAddRow());
-  }
-  /**
-   * Builds the toolbar with undo/redo and bulk operations
-   */
-  buildToolbar(toolbar) {
-    const newTableBtn = toolbar.createEl("button", { text: "New Table", cls: "table-builder-btn" });
-    newTableBtn.addEventListener("click", () => this.handleNewTable());
-    const undoButton = toolbar.createEl("button", { text: "Undo", cls: "table-builder-btn" });
-    undoButton.addEventListener("click", () => this.handleUndo());
-    const redoButton = toolbar.createEl("button", { text: "Redo", cls: "table-builder-btn" });
-    redoButton.addEventListener("click", () => this.handleRedo());
-    const clearResultsBtn = toolbar.createEl("button", {
-      text: "Clear Results",
-      cls: "table-builder-btn"
-    });
-    clearResultsBtn.addEventListener("click", () => this.handleClearResults());
-    const deleteAllBtn = toolbar.createEl("button", {
-      text: "Delete All Rows",
-      cls: "table-builder-btn"
-    });
-    deleteAllBtn.addEventListener("click", () => this.handleDeleteAllRows());
-  }
-  /**
-   * Builds the directives editor (isPrivate and tableReroll)
-   */
-  buildDirectivesEditor(container) {
-    const state = this.stateManager.getState();
-    const privateContainer = container.createDiv({ cls: "directive-item" });
-    const privateCheckbox = privateContainer.createEl("input", {
-      type: "checkbox",
-      cls: "table-builder-checkbox"
-    });
-    privateCheckbox.checked = state.isPrivate;
-    privateCheckbox.addEventListener("change", () => this.handlePrivateChange(privateCheckbox.checked));
-    privateContainer.createEl("label", { text: "Private (hidden from table picker)" });
-    const rerollContainer = container.createDiv({ cls: "directive-item" });
-    rerollContainer.createEl("label", { text: "Table Reroll:" });
-    const rerollInput = rerollContainer.createEl("input", {
-      type: "text",
-      value: state.tableReroll || "",
-      placeholder: "e.g., TableName",
-      cls: "table-builder-input"
-    });
-    rerollInput.addEventListener("input", () => this.handleTableRerollChange(rerollInput.value));
-  }
-  /**
-   * Builds the right panel with preview and export
-   */
-  buildRightPanel() {
-    if (!this.rightPanel)
-      return;
-    this.previewPanel = new PreviewPanel(this.rightPanel, this.stateManager.getState());
-    this.previewPanel.render();
-  }
-  /**
-   * Sets up event listeners for all components
-   */
-  setupEventListeners() {
-    this.stateManager.addEventListener("state-changed", (e) => {
-      this.handleStateChange(e.detail);
-    });
-    this.tableIO.addEventListener("file-saved", (e) => {
-      this.handleFileSaved(e.detail);
-    });
-    this.tableIO.addEventListener("file-loaded", (e) => {
-      this.handleFileLoaded(e.detail);
-    });
-    if (this.rightPanel) {
-      this.rightPanel.addEventListener("load-requested", () => {
-        this.tableIO.load();
-      });
-      this.rightPanel.addEventListener("save-requested", (e) => {
-        this.tableIO.setState(this.stateManager.getState());
-        if (e.detail.saveAs) {
-          this.tableIO.saveAs();
-        } else {
-          this.tableIO.save();
-        }
-      });
-      this.rightPanel.addEventListener("export-requested", (e) => {
-        this.tableIO.setState(this.stateManager.getState());
-        this.tableIO.exportAs(e.detail.format);
-      });
-      this.rightPanel.addEventListener("copy-to-clipboard", () => {
-        this.tableIO.setState(this.stateManager.getState());
-        this.tableIO.copyToClipboard();
-      });
-      this.rightPanel.addEventListener("import-from-clipboard", () => {
-        this.tableIO.importFromClipboard();
-      });
-    }
-  }
-  // ==================== Event Handlers ====================
-  /**
-   * Handles state changes from StateManager
-   */
-  handleStateChange(state) {
-    this.tableIO.setState(state);
-    if (this.columnsEditor) {
-      this.columnsEditor.updateState(state);
-    }
-    if (this.rowGridEditor) {
-      const selectedRowIndex = this.rowGridEditor.getSelectedRowIndex();
-      this.rowGridEditor.updateState(state, selectedRowIndex);
-    }
-    if (this.previewPanel) {
-      this.previewPanel.updateState(state);
-    }
-    if (this.tableNameInput) {
-      this.tableNameInput.value = state.tableName;
-    }
-    this.schedulePreviewUpdate();
-  }
-  /**
-   * Handles table name changes
-   */
-  handleTableNameChange() {
-    if (!this.tableNameInput)
-      return;
-    const currentState = this.stateManager.getState();
-    const newState = {
-      ...currentState,
-      tableName: this.tableNameInput.value
-    };
-    this.stateManager.setState(newState);
-    this.markUnsaved();
-  }
-  /**
-   * Handles private checkbox changes
-   */
-  handlePrivateChange(isPrivate) {
-    const currentState = this.stateManager.getState();
-    const newState = {
-      ...currentState,
-      isPrivate
-    };
-    this.stateManager.setState(newState);
-    this.markUnsaved();
-  }
-  /**
-   * Handles table reroll input changes
-   */
-  handleTableRerollChange(tableReroll) {
-    const currentState = this.stateManager.getState();
-    const newState = {
-      ...currentState,
-      tableReroll: tableReroll || void 0
-    };
-    this.stateManager.setState(newState);
-    this.markUnsaved();
-  }
-  /**
-   * Handles new table button click - resets to default state
-   */
-  handleNewTable() {
-    if (this.hasUnsavedChanges) {
-      const modal = new ConfirmModal(
-        this.app,
-        "Create New Table?",
-        "You have unsaved changes. Creating a new table will discard them. Continue?",
-        () => this.resetToDefaultState(),
-        { isDangerous: true }
-      );
-      modal.open();
-    } else {
-      this.resetToDefaultState();
-    }
-  }
-  /**
-   * Resets the table to default state
-   */
-  resetToDefaultState() {
-    const defaultState = getDefaultState();
-    this.stateManager.setState(defaultState);
-    this.currentFile = null;
-    this.tableIO.setCurrentFile(null);
-    this.hasUnsavedChanges = false;
-    this.leaf.setViewState({ ...this.leaf.getViewState() });
-    new import_obsidian5.Notice("Created new table");
-  }
-  /**
-   * Handles undo button click
-   */
-  handleUndo() {
-    if (this.stateManager.canUndo()) {
-      this.stateManager.undo();
-      this.markUnsaved();
-    } else {
-      new import_obsidian5.Notice("Nothing to undo");
-    }
-  }
-  /**
-   * Handles redo button click
-   */
-  handleRedo() {
-    if (this.stateManager.canRedo()) {
-      this.stateManager.redo();
-      this.markUnsaved();
-    } else {
-      new import_obsidian5.Notice("Nothing to redo");
-    }
-  }
-  /**
-   * Handles clear results button click
-   */
-  handleClearResults() {
-    const currentState = this.stateManager.getState();
-    const newRows = currentState.rows.map((row) => {
-      const newRow = { ...row };
-      currentState.columns.forEach((col) => {
-        if (col.type === "regular") {
-          newRow[col.name] = "";
-        }
-      });
-      return newRow;
-    });
-    const newState = {
-      ...currentState,
-      rows: newRows
-    };
-    this.stateManager.setState(newState);
-    this.markUnsaved();
-  }
-  /**
-   * Handles delete all rows button click
-   */
-  async handleDeleteAllRows() {
-    const confirmed = await new Promise((resolve) => {
-      const modal = new ConfirmModal(
-        this.app,
-        "Delete All Rows?",
-        "This will delete all rows. Do you want to proceed?",
-        () => resolve(true)
-      );
-      modal.open();
-    });
-    if (confirmed) {
-      const currentState = this.stateManager.getState();
-      const newState = {
-        ...currentState,
-        rows: []
-      };
-      this.stateManager.setState(newState);
-      this.markUnsaved();
-    }
-  }
-  /**
-   * Handles add row button click
-   */
-  handleAddRow() {
-    const currentState = this.stateManager.getState();
-    const newRow = {};
-    const newState = {
-      ...currentState,
-      rows: [...currentState.rows, newRow]
-    };
-    this.stateManager.setState(newState);
-    this.markUnsaved();
-  }
-  /**
-   * Handles file saved event from TableIO
-   */
-  handleFileSaved(detail) {
-    new import_obsidian5.Notice(`Saved ${detail.tableName}`);
-    this.currentFile = detail.file;
-    this.hasUnsavedChanges = false;
-    this.leaf.setViewState({ ...this.leaf.getViewState() });
-  }
-  /**
-   * Handles file loaded event from TableIO
-   */
-  handleFileLoaded(detail) {
-    this.stateManager.setState(detail.state);
-    this.currentFile = detail.file;
-    this.hasUnsavedChanges = false;
-    this.leaf.setViewState({ ...this.leaf.getViewState() });
-  }
-  // ==================== Helper Methods ====================
-  /**
-   * Marks the view as having unsaved changes
-   */
+  // Utility
   markUnsaved() {
     this.hasUnsavedChanges = true;
-    this.leaf.setViewState({ ...this.leaf.getViewState() });
   }
-  /**
-   * Schedules a preview update with debouncing
-   */
-  schedulePreviewUpdate() {
-    if (this.previewDebounceTimer) {
-      clearTimeout(this.previewDebounceTimer);
-    }
-    this.previewDebounceTimer = setTimeout(() => {
-      if (this.previewPanel) {
-        this.previewPanel.updateState(this.stateManager.getState());
-      }
-      this.previewDebounceTimer = null;
-    }, 300);
+  applyStyles() {
+    const styleEl = document.createElement("style");
+    styleEl.textContent = `
+			.table-builder-view {
+				height: 100%;
+				overflow: hidden;
+			}
+			
+			.table-builder-split {
+				display: flex;
+				height: 100%;
+				gap: 16px;
+				padding: 16px;
+			}
+			
+			.table-builder-left-panel {
+				flex: 1;
+				overflow-y: auto;
+				padding-right: 8px;
+			}
+			
+			.table-builder-right-panel {
+				flex: 1;
+				display: flex;
+				flex-direction: column;
+				overflow: hidden;
+			}
+			
+			.table-builder-toolbar {
+				display: flex;
+				gap: 8px;
+				margin-bottom: 16px;
+				flex-wrap: wrap;
+			}
+			
+			.table-builder-btn {
+				padding: 6px 12px;
+				border-radius: 4px;
+				border: 1px solid var(--background-modifier-border);
+				background: var(--interactive-normal);
+				cursor: pointer;
+				font-size: 13px;
+			}
+			
+			.table-builder-btn:hover {
+				background: var(--interactive-hover);
+			}
+			
+			.table-builder-section {
+				margin-bottom: 24px;
+			}
+			
+			.table-builder-section h3 {
+				margin: 0 0 12px 0;
+				font-size: 14px;
+				font-weight: 600;
+			}
+			
+			.table-builder-section label {
+				display: block;
+				margin-bottom: 6px;
+				font-size: 13px;
+			}
+			
+			.table-builder-section input[type="text"] {
+				width: 100%;
+				padding: 6px 8px;
+				border: 1px solid var(--background-modifier-border);
+				border-radius: 4px;
+				background: var(--background-primary);
+			}
+			
+			.columns-list {
+				display: flex;
+				flex-direction: column;
+				gap: 8px;
+				margin-bottom: 12px;
+			}
+			
+			.column-item {
+				display: flex;
+				align-items: center;
+				gap: 8px;
+				padding: 8px;
+				border: 1px solid var(--background-modifier-border);
+				border-radius: 4px;
+				background: var(--background-secondary);
+			}
+			
+			.drag-handle {
+				cursor: move;
+				color: var(--text-muted);
+				user-select: none;
+			}
+			
+			.column-item input {
+				flex: 1;
+				padding: 4px 8px;
+				border: 1px solid var(--background-modifier-border);
+				border-radius: 3px;
+			}
+			
+			.column-type {
+				font-size: 11px;
+				color: var(--text-muted);
+			}
+			
+			.delete-btn {
+				padding: 2px 8px;
+				border: none;
+				background: var(--background-modifier-error);
+				color: var(--text-on-accent);
+				border-radius: 3px;
+				cursor: pointer;
+				font-size: 16px;
+				line-height: 1;
+			}
+			
+			.add-column-btns {
+				display: flex;
+				gap: 8px;
+			}
+			
+			.directive-item {
+				margin-bottom: 12px;
+			}
+			
+			.directive-item label {
+				display: flex;
+				align-items: center;
+				gap: 8px;
+			}
+			
+			.directive-item input[type="checkbox"] {
+				margin: 0;
+			}
+			
+			.row-grid-header, .row-grid-row {
+				display: grid;
+				grid-template-columns: 40px repeat(auto-fit, minmax(100px, 1fr));
+				gap: 4px;
+				margin-bottom: 4px;
+			}
+			
+			.row-grid-header {
+				font-weight: 600;
+				border-bottom: 2px solid var(--background-modifier-border);
+				padding-bottom: 4px;
+			}
+			
+			.row-number {
+				text-align: center;
+				padding: 6px;
+				color: var(--text-muted);
+				cursor: pointer;
+			}
+			
+			.row-grid-row.selected {
+				background: var(--background-modifier-hover);
+			}
+			
+			.grid-cell {
+				padding: 2px;
+			}
+			
+			.grid-cell input {
+				width: 100%;
+				padding: 4px 6px;
+				border: 1px solid var(--background-modifier-border);
+				border-radius: 3px;
+				background: var(--background-primary);
+			}
+			
+			.examples-sidebar {
+				margin-top: 24px;
+				padding-top: 16px;
+				border-top: 1px solid var(--background-modifier-border);
+			}
+			
+			.examples-sidebar details {
+				cursor: pointer;
+			}
+			
+			.examples-content {
+				padding: 12px 0;
+			}
+			
+			.examples-content h4 {
+				margin: 8px 0;
+				font-size: 13px;
+			}
+			
+			.example-btn {
+				display: block;
+				width: 100%;
+				text-align: left;
+				padding: 6px 12px;
+				margin-bottom: 4px;
+				border: 1px solid var(--background-modifier-border);
+				border-radius: 4px;
+				background: var(--background-secondary);
+				cursor: pointer;
+				font-size: 12px;
+			}
+			
+			.example-btn:hover {
+				background: var(--background-modifier-hover);
+			}
+			
+			.placeholder-text {
+				font-size: 12px;
+				color: var(--text-muted);
+				font-style: italic;
+			}
+			
+			.preview-tabs {
+				display: flex;
+				gap: 4px;
+				margin-bottom: 12px;
+				border-bottom: 1px solid var(--background-modifier-border);
+			}
+			
+			.tab-btn {
+				padding: 8px 16px;
+				border: none;
+				background: transparent;
+				cursor: pointer;
+				border-bottom: 2px solid transparent;
+			}
+			
+			.tab-btn.active {
+				border-bottom-color: var(--interactive-accent);
+			}
+			
+			.preview-container {
+				flex: 1;
+				overflow-y: auto;
+				position: relative;
+			}
+			
+			.markdown-preview, .html-preview {
+				display: none;
+				padding: 12px;
+			}
+			
+			.markdown-preview.active, .html-preview.active {
+				display: block;
+			}
+			
+			.markdown-preview pre {
+				background: var(--background-secondary);
+				padding: 12px;
+				border-radius: 4px;
+				overflow-x: auto;
+			}
+			
+			.markdown-preview code {
+				font-family: var(--font-monospace);
+				font-size: 12px;
+				white-space: pre;
+			}
+			
+			.preview-table {
+				width: 100%;
+				border-collapse: collapse;
+			}
+			
+			.preview-table th, .preview-table td {
+				border: 1px solid var(--background-modifier-border);
+				padding: 8px;
+				text-align: left;
+			}
+			
+			.preview-table th {
+				background: var(--background-secondary);
+				font-weight: 600;
+			}
+			
+			.directives-info {
+				margin-bottom: 12px;
+				display: flex;
+				gap: 8px;
+			}
+			
+			.badge {
+				padding: 4px 8px;
+				border-radius: 4px;
+				background: var(--background-secondary);
+				font-size: 11px;
+			}
+			
+			.export-buttons {
+				display: flex;
+				gap: 8px;
+				flex-wrap: wrap;
+				padding: 12px;
+				border-top: 1px solid var(--background-modifier-border);
+			}
+			
+			.export-format {
+				padding: 6px 12px;
+				border: 1px solid var(--background-modifier-border);
+				border-radius: 4px;
+				background: var(--background-primary);
+			}
+		`;
+    document.head.appendChild(styleEl);
   }
 };
 
 // main.ts
-var TableRollerPlugin = class extends import_obsidian6.Plugin {
+var TableRollerPlugin = class extends import_obsidian3.Plugin {
   async onload() {
     console.log("Loading Table Roller plugin");
     this.roller = new TableRollerCore(this.app);
