@@ -167,19 +167,6 @@ export class RollResultModal extends Modal {
 		});
 	}
 	
-	// Add source link button
-	if (this.result.sourceFile) {
-		const sourceButton = leftDiv.createEl('button', { text: '\u2192 Source' });
-		sourceButton.setAttribute('aria-label', 'Go to table source');
-		sourceButton.addEventListener('click', async () => {
-			const file = this.app.vault.getAbstractFileByPath(this.result.sourceFile!);
-			if (file && file instanceof TFile) {
-				await this.app.workspace.getLeaf().openFile(file);
-				this.close();
-			}
-		});
-	}
-	
 	// Right side buttons container
 	const rightDiv = buttonDiv.createEl('div');
 		rightDiv.style.display = 'flex';
@@ -221,7 +208,7 @@ export class RollResultModal extends Modal {
 		// Main heading
 		lines.push(`${heading} ${result.tableName}`);
 		if (result.namespace) {
-			lines.push(`*[${result.namespace}]*`);
+			lines.push(`*[[${result.namespace}]]*`);
 		}
 		lines.push('');
 
@@ -263,12 +250,38 @@ export class RollResultModal extends Modal {
 		const heading = container.createEl(`h${headingLevel}` as any, { text: result.tableName });
 		if (result.namespace) {
 			const namespaceBadge = heading.createEl('span', { 
-				text: ` [${result.namespace}]`,
 				cls: 'namespace-badge'
 			});
 			namespaceBadge.style.fontSize = '0.8em';
 			namespaceBadge.style.opacity = '0.7';
 			namespaceBadge.style.fontWeight = 'normal';
+			
+			// Create clickable link if source file exists
+			if (result.sourceFile) {
+				const link = namespaceBadge.createEl('a', { 
+					text: ` [${result.namespace}]`,
+					href: '#'
+				});
+				link.style.cursor = 'pointer';
+				link.style.color = 'var(--text-accent)';
+				link.style.textDecoration = 'none';
+				link.addEventListener('click', async (e: MouseEvent) => {
+					e.preventDefault();
+					const file = this.app.vault.getAbstractFileByPath(result.sourceFile!);
+					if (file && file instanceof TFile) {
+						await this.app.workspace.getLeaf().openFile(file);
+						this.close();
+					}
+				});
+				link.addEventListener('mouseenter', () => {
+					link.style.textDecoration = 'underline';
+				});
+				link.addEventListener('mouseleave', () => {
+					link.style.textDecoration = 'none';
+				});
+			} else {
+				namespaceBadge.textContent = ` [${result.namespace}]`;
+			}
 		}
 
 		// Display dynamic columns if available

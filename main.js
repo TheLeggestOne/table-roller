@@ -619,17 +619,6 @@ var RollResultModal = class extends import_obsidian.Modal {
         (_a = this.onReroll) == null ? void 0 : _a.call(this);
       });
     }
-    if (this.result.sourceFile) {
-      const sourceButton = leftDiv.createEl("button", { text: "\u2192 Source" });
-      sourceButton.setAttribute("aria-label", "Go to table source");
-      sourceButton.addEventListener("click", async () => {
-        const file = this.app.vault.getAbstractFileByPath(this.result.sourceFile);
-        if (file && file instanceof import_obsidian.TFile) {
-          await this.app.workspace.getLeaf().openFile(file);
-          this.close();
-        }
-      });
-    }
     const rightDiv = buttonDiv.createEl("div");
     rightDiv.style.display = "flex";
     rightDiv.style.gap = "8px";
@@ -660,7 +649,7 @@ var RollResultModal = class extends import_obsidian.Modal {
     const heading = "#".repeat(level);
     lines.push(`${heading} ${result.tableName}`);
     if (result.namespace) {
-      lines.push(`*[${result.namespace}]*`);
+      lines.push(`*[[${result.namespace}]]*`);
     }
     lines.push("");
     if (result.columns && Object.keys(result.columns).length > 0) {
@@ -692,12 +681,36 @@ var RollResultModal = class extends import_obsidian.Modal {
     const heading = container.createEl(`h${headingLevel}`, { text: result.tableName });
     if (result.namespace) {
       const namespaceBadge = heading.createEl("span", {
-        text: ` [${result.namespace}]`,
         cls: "namespace-badge"
       });
       namespaceBadge.style.fontSize = "0.8em";
       namespaceBadge.style.opacity = "0.7";
       namespaceBadge.style.fontWeight = "normal";
+      if (result.sourceFile) {
+        const link = namespaceBadge.createEl("a", {
+          text: ` [${result.namespace}]`,
+          href: "#"
+        });
+        link.style.cursor = "pointer";
+        link.style.color = "var(--text-accent)";
+        link.style.textDecoration = "none";
+        link.addEventListener("click", async (e) => {
+          e.preventDefault();
+          const file = this.app.vault.getAbstractFileByPath(result.sourceFile);
+          if (file && file instanceof import_obsidian.TFile) {
+            await this.app.workspace.getLeaf().openFile(file);
+            this.close();
+          }
+        });
+        link.addEventListener("mouseenter", () => {
+          link.style.textDecoration = "underline";
+        });
+        link.addEventListener("mouseleave", () => {
+          link.style.textDecoration = "none";
+        });
+      } else {
+        namespaceBadge.textContent = ` [${result.namespace}]`;
+      }
     }
     if (result.columns && Object.keys(result.columns).length > 0) {
       for (const [header, value] of Object.entries(result.columns)) {
