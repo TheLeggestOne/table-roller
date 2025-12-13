@@ -1049,10 +1049,6 @@ var TableBuilderView = class extends import_obsidian2.ItemView {
     undoButton.addEventListener("click", () => this.undo());
     const redoButton = toolbar.createEl("button", { text: "Redo", cls: "table-builder-btn" });
     redoButton.addEventListener("click", () => this.redo());
-    const duplicateBtn = toolbar.createEl("button", { text: "Duplicate Row", cls: "table-builder-btn" });
-    duplicateBtn.addEventListener("click", () => this.duplicateRow());
-    const deleteRowBtn = toolbar.createEl("button", { text: "Delete Row", cls: "table-builder-btn" });
-    deleteRowBtn.addEventListener("click", () => this.deleteRow());
     const clearResultsBtn = toolbar.createEl("button", { text: "Clear Results", cls: "table-builder-btn" });
     clearResultsBtn.addEventListener("click", () => this.clearResults());
     const deleteAllBtn = toolbar.createEl("button", { text: "Delete All Rows", cls: "table-builder-btn" });
@@ -1196,6 +1192,25 @@ var TableBuilderView = class extends import_obsidian2.ItemView {
             }
           });
         }
+      });
+      const actionsCell = rowEl.createDiv({ cls: "row-actions" });
+      const duplicateBtn = actionsCell.createEl("button", {
+        text: "\u{1F4CB}",
+        cls: "row-action-btn",
+        attr: { "aria-label": "Duplicate row", "title": "Duplicate row" }
+      });
+      duplicateBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        this.duplicateRowAt(rowIndex);
+      });
+      const deleteBtn = actionsCell.createEl("button", {
+        text: "\u2715",
+        cls: "row-action-btn row-delete-btn",
+        attr: { "aria-label": "Delete row", "title": "Delete row" }
+      });
+      deleteBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        this.deleteRowAt(rowIndex);
       });
     });
   }
@@ -1446,25 +1461,28 @@ var TableBuilderView = class extends import_obsidian2.ItemView {
     this.buildRowGrid();
     this.schedulePreviewUpdate();
   }
-  duplicateRow() {
+  duplicateRowAt(index) {
     if (this.state.rows.length === 0)
       return;
     this.captureState();
-    const row = this.state.rows[this.selectedRowIndex];
+    const row = this.state.rows[index];
     const copy = JSON.parse(JSON.stringify(row));
-    this.state.rows.splice(this.selectedRowIndex + 1, 0, copy);
-    this.selectedRowIndex++;
+    this.state.rows.splice(index + 1, 0, copy);
+    this.selectedRowIndex = index + 1;
     this.markUnsaved();
     this.buildRowGrid();
     this.schedulePreviewUpdate();
   }
-  deleteRow() {
+  deleteRowAt(index) {
     if (this.state.rows.length === 0)
       return;
     this.captureState();
-    this.state.rows.splice(this.selectedRowIndex, 1);
+    this.state.rows.splice(index, 1);
     if (this.selectedRowIndex >= this.state.rows.length && this.selectedRowIndex > 0) {
       this.selectedRowIndex--;
+    }
+    if (index === this.selectedRowIndex && this.state.rows.length > 0) {
+      this.selectedRowIndex = Math.min(index, this.state.rows.length - 1);
     }
     this.markUnsaved();
     this.buildRowGrid();
@@ -2129,12 +2147,53 @@ var TableBuilderView = class extends import_obsidian2.ItemView {
     }
     const diceCol = this.state.columns.find((c) => c.type === "dice");
     if (diceCol) {
+      const ranges = [];
       for (const row of this.state.rows) {
         const range = row.range;
         if (range) {
           const parsed = TableParser["parseRange"](range);
           if (parsed.min === 0 && parsed.max === 0) {
             errors.push(`Invalid range format: ${range}`);
+          } else {
+            ranges.push({ min: parsed.min, max: parsed.max, raw: range });
+          }
+        }
+      }
+      for (let i = 0; i < ranges.length; i++) {
+        for (let j = i + 1; j < ranges.length; j++) {
+          const r1 = ranges[i];
+          const r2 = ranges[j];
+          if (r1.min <= r2.max && r2.min <= r1.max) {
+            errors.push(`Duplicate or overlapping ranges: ${r1.raw} and ${r2.raw}`);
+          }
+        }
+      }
+      if (diceCol.diceNotation && ranges.length > 0) {
+        const match = diceCol.diceNotation.match(/(\d*)d(\d+)/i);
+        if (match) {
+          const numDice = match[1] ? parseInt(match[1]) : 1;
+          const sides = parseInt(match[2]);
+          if (numDice === 1) {
+            const sortedRanges = [...ranges].sort((a, b) => a.min - b.min);
+            if (sortedRanges[0].min !== 1) {
+              errors.push(`Dice ranges should start at 1 (found: ${sortedRanges[0].min})`);
+            }
+            const lastRange = sortedRanges[sortedRanges.length - 1];
+            if (lastRange.max !== sides) {
+              errors.push(`Dice ranges should end at ${sides} for ${diceCol.diceNotation} (found: ${lastRange.max})`);
+            }
+            const hasOverlaps = ranges.some(
+              (r1, i) => ranges.some((r2, j) => i !== j && r1.min <= r2.max && r2.min <= r1.max)
+            );
+            if (!hasOverlaps) {
+              for (let i = 0; i < sortedRanges.length - 1; i++) {
+                const current = sortedRanges[i];
+                const next = sortedRanges[i + 1];
+                if (current.max + 1 !== next.min) {
+                  errors.push(`Gap in dice ranges between ${current.raw} and ${next.raw}`);
+                }
+              }
+            }
           }
         }
       }

@@ -153,12 +153,6 @@ export class TableBuilderView extends ItemView {
 		redoButton.addEventListener('click', () => this.redo());
 		
 		// Bulk operations
-		const duplicateBtn = toolbar.createEl('button', { text: 'Duplicate Row', cls: 'table-builder-btn' });
-		duplicateBtn.addEventListener('click', () => this.duplicateRow());
-		
-		const deleteRowBtn = toolbar.createEl('button', { text: 'Delete Row', cls: 'table-builder-btn' });
-		deleteRowBtn.addEventListener('click', () => this.deleteRow());
-		
 		const clearResultsBtn = toolbar.createEl('button', { text: 'Clear Results', cls: 'table-builder-btn' });
 		clearResultsBtn.addEventListener('click', () => this.clearResults());
 		
@@ -358,6 +352,31 @@ export class TableBuilderView extends ItemView {
 						}
 					});
 				}
+			});
+			
+			// Action buttons container
+			const actionsCell = rowEl.createDiv({ cls: 'row-actions' });
+			
+			// Duplicate button
+			const duplicateBtn = actionsCell.createEl('button', { 
+				text: '📋',
+				cls: 'row-action-btn',
+				attr: { 'aria-label': 'Duplicate row', 'title': 'Duplicate row' }
+			});
+			duplicateBtn.addEventListener('click', (e) => {
+				e.stopPropagation();
+				this.duplicateRowAt(rowIndex);
+			});
+			
+			// Delete button
+			const deleteBtn = actionsCell.createEl('button', { 
+				text: '✕',
+				cls: 'row-action-btn row-delete-btn',
+				attr: { 'aria-label': 'Delete row', 'title': 'Delete row' }
+			});
+			deleteBtn.addEventListener('click', (e) => {
+				e.stopPropagation();
+				this.deleteRowAt(rowIndex);
 			});
 		});
 	}
@@ -692,26 +711,31 @@ export class TableBuilderView extends ItemView {
 		this.schedulePreviewUpdate();
 	}
 
-	private duplicateRow(): void {
+	private duplicateRowAt(index: number): void {
 		if (this.state.rows.length === 0) return;
 		
 		this.captureState();
-		const row = this.state.rows[this.selectedRowIndex];
+		const row = this.state.rows[index];
 		const copy = JSON.parse(JSON.stringify(row));
-		this.state.rows.splice(this.selectedRowIndex + 1, 0, copy);
-		this.selectedRowIndex++;
+		// Insert below the current row
+		this.state.rows.splice(index + 1, 0, copy);
+		this.selectedRowIndex = index + 1;
 		this.markUnsaved();
 		this.buildRowGrid();
 		this.schedulePreviewUpdate();
 	}
 
-	private deleteRow(): void {
+	private deleteRowAt(index: number): void {
 		if (this.state.rows.length === 0) return;
 		
 		this.captureState();
-		this.state.rows.splice(this.selectedRowIndex, 1);
+		this.state.rows.splice(index, 1);
 		if (this.selectedRowIndex >= this.state.rows.length && this.selectedRowIndex > 0) {
 			this.selectedRowIndex--;
+		}
+		// If we deleted the selected row, update selection
+		if (index === this.selectedRowIndex && this.state.rows.length > 0) {
+			this.selectedRowIndex = Math.min(index, this.state.rows.length - 1);
 		}
 		this.markUnsaved();
 		this.buildRowGrid();
@@ -1563,12 +1587,70 @@ export class TableBuilderView extends ItemView {
 		// Validate dice ranges
 		const diceCol = this.state.columns.find(c => c.type === 'dice');
 		if (diceCol) {
+			const ranges: Array<{min: number, max: number, raw: string}> = [];
+			
 			for (const row of this.state.rows) {
 				const range = row.range;
 				if (range) {
 					const parsed = TableParser['parseRange'](range);
 					if (parsed.min === 0 && parsed.max === 0) {
 						errors.push(`Invalid range format: ${range}`);
+					} else {
+						ranges.push({min: parsed.min, max: parsed.max, raw: range});
+					}
+				}
+			}
+			
+			// Check for duplicate or overlapping ranges
+			for (let i = 0; i < ranges.length; i++) {
+				for (let j = i + 1; j < ranges.length; j++) {
+					const r1 = ranges[i];
+					const r2 = ranges[j];
+					
+					// Check if ranges overlap
+					if (r1.min <= r2.max && r2.min <= r1.max) {
+						errors.push(`Duplicate or overlapping ranges: ${r1.raw} and ${r2.raw}`);
+					}
+				}
+			}
+			
+			// Check if ranges cover expected dice values
+			if (diceCol.diceNotation && ranges.length > 0) {
+				const match = diceCol.diceNotation.match(/(\d*)d(\d+)/i);
+				if (match) {
+					const numDice = match[1] ? parseInt(match[1]) : 1;
+					const sides = parseInt(match[2]);
+					
+					// For single dice (1dX), check coverage
+					if (numDice === 1) {
+						// Sort ranges by min value
+						const sortedRanges = [...ranges].sort((a, b) => a.min - b.min);
+						
+						// Check if we start at 1
+						if (sortedRanges[0].min !== 1) {
+							errors.push(`Dice ranges should start at 1 (found: ${sortedRanges[0].min})`);
+						}
+						
+						// Check if we end at the max dice value
+						const lastRange = sortedRanges[sortedRanges.length - 1];
+						if (lastRange.max !== sides) {
+							errors.push(`Dice ranges should end at ${sides} for ${diceCol.diceNotation} (found: ${lastRange.max})`);
+						}
+						
+						// Check for gaps (only if no overlaps detected, since overlaps will cause false gap warnings)
+						const hasOverlaps = ranges.some((r1, i) => 
+							ranges.some((r2, j) => i !== j && r1.min <= r2.max && r2.min <= r1.max)
+						);
+						
+						if (!hasOverlaps) {
+							for (let i = 0; i < sortedRanges.length - 1; i++) {
+								const current = sortedRanges[i];
+								const next = sortedRanges[i + 1];
+								if (current.max + 1 !== next.min) {
+									errors.push(`Gap in dice ranges between ${current.raw} and ${next.raw}`);
+								}
+							}
+						}
 					}
 				}
 			}
