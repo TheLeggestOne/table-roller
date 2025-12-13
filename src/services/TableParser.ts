@@ -53,6 +53,7 @@ export class TableParser {
 		const lines = bodyContent.split('\n');
 		let currentTableName: string | null = null;
 		let currentTableReroll: string | undefined = undefined;
+		let currentTablePrivate: boolean = false;
 		let currentTable: string[] = [];
 		let inTable = false;
 		let tableCount = 0;
@@ -67,24 +68,33 @@ export class TableParser {
 				if (inTable && currentTable.length > 0) {
 					const parsed = this.parseTable(currentTable);
 					if (parsed && currentTableName) {
-						tables[currentTableName] = this.processTable(parsed, currentTableReroll);
+						tables[currentTableName] = this.processTable(parsed, currentTableReroll, currentTablePrivate);
 					}
 					inTable = false;
 					currentTable = [];
 					currentTableReroll = undefined;
+					currentTablePrivate = false;
 				}
 				currentTableName = headingMatch[1].trim();
-				continue;
-			}
+			console.log(`Found heading: "${currentTableName}"`);
+			continue;
+		}
 
-			// Check for table-level reroll directive (line after heading)
-			const rerollMatch = line.match(/^reroll:\s*(.+)$/i);
-			if (rerollMatch && currentTableName && !inTable) {
-				currentTableReroll = rerollMatch[1].trim();
-				continue;
-			}
+		// Check for table-level reroll directive (line after heading)
+		const rerollMatch = line.match(/^reroll:\s*(.+)$/i);
+		if (rerollMatch && currentTableName && !inTable) {
+			currentTableReroll = rerollMatch[1].trim();
+			continue;
+		}
 
-			// Check if line is part of a table
+		// Check for private directive (line after heading)
+		const privateMatch = line.match(/^private:\s*(true|yes|1)$/i);
+		if (privateMatch && currentTableName && !inTable) {
+			currentTablePrivate = true;
+			continue;
+		}
+
+		// Check if line is part of a table
 			if (line.includes('|')) {
 				if (!inTable) {
 					inTable = true;
@@ -100,12 +110,14 @@ export class TableParser {
 				// End of table
 				const parsed = this.parseTable(currentTable);
 				if (parsed && currentTableName) {
-					tables[currentTableName] = this.processTable(parsed, currentTableReroll);
+					tables[currentTableName] = this.processTable(parsed, currentTableReroll, currentTablePrivate);
 				}
 				inTable = false;
 				currentTable = [];
 				currentTableName = null;
 				currentTableReroll = undefined;
+				currentTablePrivate = false;
+				currentTablePrivate = false;
 			}
 		}
 
@@ -113,7 +125,7 @@ export class TableParser {
 		if (inTable && currentTable.length > 0 && currentTableName) {
 			const parsed = this.parseTable(currentTable);
 			if (parsed) {
-				tables[currentTableName] = this.processTable(parsed, currentTableReroll);
+				tables[currentTableName] = this.processTable(parsed, currentTableReroll, currentTablePrivate);
 			}
 		}
 
@@ -157,13 +169,13 @@ export class TableParser {
 	/**
 	 * Process parsed table into dice or simple format
 	 */
-	private static processTable(parsed: { headers: string[], rows: Record<string, string>[] }, tableReroll?: string): Table {
+	private static processTable(parsed: { headers: string[], rows: Record<string, string>[] }, tableReroll?: string, tablePrivate?: boolean): Table {
 		// Check if table has a dice column
 		const diceHeader = parsed.headers.find(h => /^d\d+$/i.test(h.trim()));
 
 		if (diceHeader) {
 			// Convert to dice table format
-			return this.processDiceTable(parsed, diceHeader, tableReroll);
+			return this.processDiceTable(parsed, diceHeader, tableReroll, tablePrivate);
 		} else {
 			// Keep as simple table
 			const table: any = {
@@ -173,6 +185,9 @@ export class TableParser {
 			if (tableReroll) {
 				table.reroll = tableReroll;
 			}
+			if (tablePrivate) {
+				table.private = tablePrivate;
+			}
 			return table;
 		}
 	}
@@ -180,7 +195,7 @@ export class TableParser {
 	/**
 	 * Process a dice-based table
 	 */
-	private static processDiceTable(parsed: { headers: string[], rows: Record<string, string>[] }, diceHeader: string, tableReroll?: string): DiceTable {
+	private static processDiceTable(parsed: { headers: string[], rows: Record<string, string>[] }, diceHeader: string, tableReroll?: string, tablePrivate?: boolean): DiceTable {
 		const entries: any[] = [];
 		const rerollHeader = parsed.headers.find(h => /^reroll$/i.test(h.trim()));
 
@@ -191,16 +206,30 @@ export class TableParser {
 			let result = '';
 			let details = '';
 			let reroll: string | undefined;
+			const columns: Record<string, string> = {};
 
 			for (const [key, value] of Object.entries(row)) {
-				if (key === diceHeader || !value || !value.trim()) continue;
+				if (key === diceHeader) continue;
 
-				if (rerollHeader && key === rerollHeader) {
+				// Check if this is the reroll column (case-insensitive)
+				const isRerollColumn = rerollHeader && key.toLowerCase().trim() === rerollHeader.toLowerCase().trim();
+				
+				if (isRerollColumn) {
 					const trimmed = value.trim();
-					if (trimmed !== '—' && trimmed !== '-') {
+					if (trimmed && trimmed !== '—' && trimmed !== '-') {
 						reroll = trimmed;
 					}
-				} else if (!result) {
+					continue; // Don't include reroll column in display columns
+				}
+				
+				// Skip empty values for display columns
+				if (!value || !value.trim()) continue;
+				
+				// Store all non-dice, non-reroll columns
+				columns[key] = value;
+				
+				// Maintain backward compatibility
+				if (!result) {
 					result = value;
 				} else if (!details) {
 					details = value;
@@ -209,9 +238,9 @@ export class TableParser {
 				}
 			}
 
-			const entry: any = { min, max, result };
+			const entry: any = { min, max, result, columns };
 			if (details) entry.details = details;
-			if (reroll) entry.reroll = reroll;
+		if (reroll) entry.reroll = reroll;
 			entries.push(entry);
 		}
 
@@ -222,6 +251,10 @@ export class TableParser {
 
 		if (tableReroll) {
 			table.reroll = tableReroll;
+		}
+		
+		if (tablePrivate) {
+			table.private = tablePrivate;
 		}
 
 		return table;
@@ -241,8 +274,8 @@ export class TableParser {
 			return { min: num, max: num };
 		}
 
-		// Range (e.g., "1-3")
-		const rangeMatch = trimmed.match(/^(\d+)-(\d+)$/);
+		// Range (e.g., "1-3", "1–3" with en-dash, or "1—3" with em-dash)
+		const rangeMatch = trimmed.match(/^(\d+)[\-\u2013\u2014](\d+)$/);
 		if (rangeMatch) {
 			return {
 				min: parseInt(rangeMatch[1]),

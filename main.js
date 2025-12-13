@@ -70,6 +70,7 @@ var TableParser = class {
     const lines = bodyContent.split("\n");
     let currentTableName = null;
     let currentTableReroll = void 0;
+    let currentTablePrivate = false;
     let currentTable = [];
     let inTable = false;
     let tableCount = 0;
@@ -80,18 +81,25 @@ var TableParser = class {
         if (inTable && currentTable.length > 0) {
           const parsed = this.parseTable(currentTable);
           if (parsed && currentTableName) {
-            tables[currentTableName] = this.processTable(parsed, currentTableReroll);
+            tables[currentTableName] = this.processTable(parsed, currentTableReroll, currentTablePrivate);
           }
           inTable = false;
           currentTable = [];
           currentTableReroll = void 0;
+          currentTablePrivate = false;
         }
         currentTableName = headingMatch[1].trim();
+        console.log(`Found heading: "${currentTableName}"`);
         continue;
       }
       const rerollMatch = line.match(/^reroll:\s*(.+)$/i);
       if (rerollMatch && currentTableName && !inTable) {
         currentTableReroll = rerollMatch[1].trim();
+        continue;
+      }
+      const privateMatch = line.match(/^private:\s*(true|yes|1)$/i);
+      if (privateMatch && currentTableName && !inTable) {
+        currentTablePrivate = true;
         continue;
       }
       if (line.includes("|")) {
@@ -107,18 +115,20 @@ var TableParser = class {
       } else if (inTable && currentTable.length > 0) {
         const parsed = this.parseTable(currentTable);
         if (parsed && currentTableName) {
-          tables[currentTableName] = this.processTable(parsed, currentTableReroll);
+          tables[currentTableName] = this.processTable(parsed, currentTableReroll, currentTablePrivate);
         }
         inTable = false;
         currentTable = [];
         currentTableName = null;
         currentTableReroll = void 0;
+        currentTablePrivate = false;
+        currentTablePrivate = false;
       }
     }
     if (inTable && currentTable.length > 0 && currentTableName) {
       const parsed = this.parseTable(currentTable);
       if (parsed) {
-        tables[currentTableName] = this.processTable(parsed, currentTableReroll);
+        tables[currentTableName] = this.processTable(parsed, currentTableReroll, currentTablePrivate);
       }
     }
     return { tables, frontmatter, isTableFile, namespace };
@@ -149,10 +159,10 @@ var TableParser = class {
   /**
    * Process parsed table into dice or simple format
    */
-  static processTable(parsed, tableReroll) {
+  static processTable(parsed, tableReroll, tablePrivate) {
     const diceHeader = parsed.headers.find((h) => /^d\d+$/i.test(h.trim()));
     if (diceHeader) {
-      return this.processDiceTable(parsed, diceHeader, tableReroll);
+      return this.processDiceTable(parsed, diceHeader, tableReroll, tablePrivate);
     } else {
       const table = {
         headers: parsed.headers,
@@ -161,13 +171,16 @@ var TableParser = class {
       if (tableReroll) {
         table.reroll = tableReroll;
       }
+      if (tablePrivate) {
+        table.private = tablePrivate;
+      }
       return table;
     }
   }
   /**
    * Process a dice-based table
    */
-  static processDiceTable(parsed, diceHeader, tableReroll) {
+  static processDiceTable(parsed, diceHeader, tableReroll, tablePrivate) {
     const entries = [];
     const rerollHeader = parsed.headers.find((h) => /^reroll$/i.test(h.trim()));
     for (const row of parsed.rows) {
@@ -176,15 +189,22 @@ var TableParser = class {
       let result = "";
       let details = "";
       let reroll;
+      const columns = {};
       for (const [key, value] of Object.entries(row)) {
-        if (key === diceHeader || !value || !value.trim())
+        if (key === diceHeader)
           continue;
-        if (rerollHeader && key === rerollHeader) {
+        const isRerollColumn = rerollHeader && key.toLowerCase().trim() === rerollHeader.toLowerCase().trim();
+        if (isRerollColumn) {
           const trimmed = value.trim();
-          if (trimmed !== "\u2014" && trimmed !== "-") {
+          if (trimmed && trimmed !== "\u2014" && trimmed !== "-") {
             reroll = trimmed;
           }
-        } else if (!result) {
+          continue;
+        }
+        if (!value || !value.trim())
+          continue;
+        columns[key] = value;
+        if (!result) {
           result = value;
         } else if (!details) {
           details = value;
@@ -192,7 +212,7 @@ var TableParser = class {
           details += " | " + value;
         }
       }
-      const entry = { min, max, result };
+      const entry = { min, max, result, columns };
       if (details)
         entry.details = details;
       if (reroll)
@@ -205,6 +225,9 @@ var TableParser = class {
     };
     if (tableReroll) {
       table.reroll = tableReroll;
+    }
+    if (tablePrivate) {
+      table.private = tablePrivate;
     }
     return table;
   }
@@ -219,7 +242,7 @@ var TableParser = class {
       const num = parseInt(trimmed);
       return { min: num, max: num };
     }
-    const rangeMatch = trimmed.match(/^(\d+)-(\d+)$/);
+    const rangeMatch = trimmed.match(/^(\d+)[\-\u2013\u2014](\d+)$/);
     if (rangeMatch) {
       return {
         min: parseInt(rangeMatch[1]),
@@ -307,18 +330,25 @@ var TableRollerCore = class {
       return;
     }
     for (const [name, table] of Object.entries(parsed.tables)) {
-      this.tables.set(name, { table, namespace });
+      this.tables.set(name, { table, namespace, file });
       const fullName = `${namespace}.${name}`;
-      this.tables.set(fullName, { table, namespace });
+      this.tables.set(fullName, { table, namespace, file });
     }
+  }
+  /**
+   * Get source file path for a table
+   */
+  getTableFile(tableName, contextNamespace) {
+    const tableData = this.findTable(tableName, contextNamespace);
+    return tableData == null ? void 0 : tableData.file;
   }
   /**
    * Get list of all available table names
    */
   getTableNames() {
     const names = /* @__PURE__ */ new Set();
-    for (const key of this.tables.keys()) {
-      if (!key.includes(".")) {
+    for (const [key, data] of this.tables.entries()) {
+      if (!key.includes(".") && !data.table.private) {
         names.add(key);
       }
     }
@@ -332,17 +362,17 @@ var TableRollerCore = class {
     if (!tableData) {
       throw new Error(`Table not found: ${tableName}`);
     }
-    return this.rollOnTable(tableName, tableData.table, tableData.namespace, modifier);
+    return this.rollOnTable(tableName, tableData.table, tableData.namespace, tableData.file.path, modifier);
   }
   /**
    * Roll on a specific table
    */
-  rollOnTable(tableName, table, namespace, modifier = 0) {
+  rollOnTable(tableName, table, namespace, sourceFile, modifier = 0) {
     let result;
     if (this.isDiceTable(table)) {
-      result = this.rollDiceTable(tableName, table, namespace, modifier);
+      result = this.rollDiceTable(tableName, table, namespace, sourceFile, modifier);
     } else {
-      result = this.rollSimpleTable(tableName, table, namespace);
+      result = this.rollSimpleTable(tableName, table, namespace, sourceFile);
     }
     if (table.reroll) {
       const tableRerolls = this.resolveRerolls(table.reroll, namespace, modifier);
@@ -357,7 +387,7 @@ var TableRollerCore = class {
   /**
    * Roll on a dice-based table
    */
-  rollDiceTable(tableName, table, namespace, modifier = 0) {
+  rollDiceTable(tableName, table, namespace, sourceFile, modifier = 0) {
     const baseRoll = DiceRoller.roll(table.dice);
     let rollValue = baseRoll + modifier;
     const minBound = Math.min(...table.entries.map((e) => e.min));
@@ -372,7 +402,9 @@ var TableRollerCore = class {
       namespace,
       roll: rollValue,
       result: entry.result,
-      details: entry.details
+      details: entry.details,
+      columns: entry.columns,
+      sourceFile
     };
     if (entry.reroll) {
       result.nestedRolls = this.resolveRerolls(entry.reroll, namespace, modifier);
@@ -382,7 +414,7 @@ var TableRollerCore = class {
   /**
    * Roll on a simple table (random row selection)
    */
-  rollSimpleTable(tableName, table, namespace) {
+  rollSimpleTable(tableName, table, namespace, sourceFile) {
     const randomIndex = Math.floor(Math.random() * table.rows.length);
     const row = table.rows[randomIndex];
     const resultParts = [];
@@ -394,7 +426,8 @@ var TableRollerCore = class {
     return {
       tableName,
       namespace,
-      result: resultParts.join("\n")
+      result: resultParts.join("\n"),
+      sourceFile
     };
   }
   /**
@@ -407,7 +440,7 @@ var TableRollerCore = class {
       const tableData = this.findTable(name, contextNamespace);
       if (tableData) {
         try {
-          results.push(this.rollOnTable(name, tableData.table, tableData.namespace, modifier));
+          results.push(this.rollOnTable(name, tableData.table, tableData.namespace, tableData.file.path, modifier));
         } catch (error) {
           console.warn(`Failed to roll on ${name}:`, error);
         }
@@ -453,10 +486,12 @@ var TableRollerCore = class {
 // src/ui/modals.ts
 var import_obsidian = require("obsidian");
 var TableSelectorModal = class extends import_obsidian.Modal {
-  constructor(app, tables, onSelect) {
+  constructor(app, tables, onSelect, roller) {
     super(app);
+    this.showRollNumbers = false;
     this.tables = tables;
     this.onSelect = onSelect;
+    this.roller = roller;
   }
   onOpen() {
     const { contentEl } = this;
@@ -479,6 +514,23 @@ var TableSelectorModal = class extends import_obsidian.Modal {
     let useModifiers = false;
     checkbox.addEventListener("change", () => {
       useModifiers = checkbox.checked;
+    });
+    const rollNumsContainer = contentEl.createEl("div");
+    rollNumsContainer.style.marginTop = "8px";
+    rollNumsContainer.style.marginBottom = "16px";
+    rollNumsContainer.style.padding = "12px";
+    rollNumsContainer.style.backgroundColor = "var(--background-secondary)";
+    rollNumsContainer.style.borderRadius = "6px";
+    const rollNumsLabel = rollNumsContainer.createEl("label");
+    rollNumsLabel.style.display = "flex";
+    rollNumsLabel.style.alignItems = "center";
+    rollNumsLabel.style.cursor = "pointer";
+    const rollNumsCheckbox = rollNumsLabel.createEl("input", { type: "checkbox" });
+    rollNumsCheckbox.style.marginRight = "8px";
+    const rollNumsLabelText = rollNumsLabel.createEl("span", { text: "Show roll numbers" });
+    rollNumsLabelText.style.fontWeight = "500";
+    rollNumsCheckbox.addEventListener("change", () => {
+      this.showRollNumbers = rollNumsCheckbox.checked;
     });
     const listEl = contentEl.createEl("div", { cls: "table-list" });
     listEl.style.display = "flex";
@@ -526,27 +578,41 @@ var TableSelectorModal = class extends import_obsidian.Modal {
   }
 };
 var RollResultModal = class extends import_obsidian.Modal {
-  constructor(app, result, onReroll) {
+  constructor(app, result, onReroll, showRollNumbers = false) {
     super(app);
     this.result = result;
     this.onReroll = onReroll;
+    this.showRollNumbers = showRollNumbers;
   }
   onOpen() {
     const { contentEl } = this;
     contentEl.empty();
-    this.displayResult(contentEl, this.result, 2);
+    this.displayResult(contentEl, this.result, 2, this.showRollNumbers);
     const buttonDiv = contentEl.createEl("div", { cls: "modal-button-container" });
     buttonDiv.style.marginTop = "20px";
     buttonDiv.style.display = "flex";
     buttonDiv.style.justifyContent = "space-between";
     buttonDiv.style.gap = "8px";
     const leftDiv = buttonDiv.createEl("div");
+    leftDiv.style.display = "flex";
+    leftDiv.style.gap = "8px";
     if (this.onReroll) {
       const rerollButton = leftDiv.createEl("button", { text: "Reroll" });
       rerollButton.addEventListener("click", () => {
         var _a;
         this.close();
         (_a = this.onReroll) == null ? void 0 : _a.call(this);
+      });
+    }
+    if (this.result.sourceFile) {
+      const sourceButton = leftDiv.createEl("button", { text: "\u2192 Source" });
+      sourceButton.setAttribute("aria-label", "Go to table source");
+      sourceButton.addEventListener("click", async () => {
+        const file = this.app.vault.getAbstractFileByPath(this.result.sourceFile);
+        if (file && file instanceof import_obsidian.TFile) {
+          await this.app.workspace.getLeaf().openFile(file);
+          this.close();
+        }
       });
     }
     const rightDiv = buttonDiv.createEl("div");
@@ -582,12 +648,20 @@ var RollResultModal = class extends import_obsidian.Modal {
       lines.push(`*[${result.namespace}]*`);
     }
     lines.push("");
-    if (result.roll !== void 0) {
-      lines.push(`**Roll:** ${result.roll}`);
+    if (result.columns && Object.keys(result.columns).length > 0) {
+      for (const [header, value] of Object.entries(result.columns)) {
+        if (value && value.trim()) {
+          lines.push(`**${header}:** ${value}`);
+        }
+      }
+    } else {
+      lines.push(`**Result:** ${result.result}`);
+      if (result.details) {
+        lines.push(`**Details:** ${result.details}`);
+      }
     }
-    lines.push(`**Result:** ${result.result}`);
-    if (result.details) {
-      lines.push(`**Details:** ${result.details}`);
+    if (this.showRollNumbers && result.roll !== void 0) {
+      lines.push(`**Roll:** ${result.roll}`);
     }
     if (result.nestedRolls && result.nestedRolls.length > 0) {
       lines.push("");
@@ -599,7 +673,7 @@ var RollResultModal = class extends import_obsidian.Modal {
     }
     return lines.join("\n");
   }
-  displayResult(container, result, headingLevel) {
+  displayResult(container, result, headingLevel, showRollNumbers = false) {
     const heading = container.createEl(`h${headingLevel}`, { text: result.tableName });
     if (result.namespace) {
       const namespaceBadge = heading.createEl("span", {
@@ -610,18 +684,30 @@ var RollResultModal = class extends import_obsidian.Modal {
       namespaceBadge.style.opacity = "0.7";
       namespaceBadge.style.fontWeight = "normal";
     }
-    if (result.roll !== void 0) {
+    if (result.columns && Object.keys(result.columns).length > 0) {
+      for (const [header, value] of Object.entries(result.columns)) {
+        if (value && value.trim()) {
+          const colEl = container.createEl("div", { cls: "result-column" });
+          colEl.innerHTML = `<strong>${header}:</strong> ${value}`;
+          colEl.style.marginBottom = "8px";
+        }
+      }
+    } else {
+      const resultEl = container.createEl("div", { cls: "result-text" });
+      resultEl.innerHTML = `<strong>Result:</strong> ${result.result}`;
+      resultEl.style.marginBottom = "8px";
+      if (result.details) {
+        const detailsEl = container.createEl("div", { cls: "result-details" });
+        detailsEl.innerHTML = `<strong>Details:</strong> ${result.details}`;
+        detailsEl.style.marginBottom = "12px";
+      }
+    }
+    if (showRollNumbers && result.roll !== void 0) {
       const rollEl = container.createEl("p", { cls: "roll-value" });
       rollEl.innerHTML = `<strong>Roll:</strong> ${result.roll}`;
       rollEl.style.marginBottom = "8px";
-    }
-    const resultEl = container.createEl("div", { cls: "result-text" });
-    resultEl.innerHTML = `<strong>Result:</strong> ${result.result}`;
-    resultEl.style.marginBottom = "8px";
-    if (result.details) {
-      const detailsEl = container.createEl("div", { cls: "result-details" });
-      detailsEl.innerHTML = `<strong>Details:</strong> ${result.details}`;
-      detailsEl.style.marginBottom = "12px";
+      rollEl.style.opacity = "0.7";
+      rollEl.style.fontSize = "0.9em";
     }
     if (result.nestedRolls && result.nestedRolls.length > 0) {
       const nestedHeader = container.createEl("p", {
@@ -637,7 +723,7 @@ var RollResultModal = class extends import_obsidian.Modal {
         nestedDiv.style.paddingLeft = "12px";
         nestedDiv.style.borderLeft = "3px solid var(--background-modifier-border)";
         nestedDiv.style.marginTop = "12px";
-        this.displayResult(nestedDiv, nested, Math.min(headingLevel + 1, 6));
+        this.displayResult(nestedDiv, nested, Math.min(headingLevel + 1, 6), showRollNumbers);
       }
     }
   }
@@ -809,7 +895,7 @@ var TableRollerPlugin = class extends import_obsidian2.Plugin {
           console.warn("No tables found with table-roller frontmatter");
           return;
         }
-        new TableSelectorModal(this.app, tables, (tableNameWithModifier) => {
+        const selectorModal = new TableSelectorModal(this.app, tables, (tableNameWithModifier) => {
           try {
             let tableName = tableNameWithModifier;
             let modifier = 0;
@@ -818,15 +904,60 @@ var TableRollerPlugin = class extends import_obsidian2.Plugin {
               tableName = parts[0];
               modifier = parseInt(parts[1]) || 0;
             }
+            const showRollNumbers = selectorModal.showRollNumbers;
             const performRoll = () => {
               const result = this.roller.roll(tableName, void 0, modifier);
-              new RollResultModal(this.app, result, performRoll).open();
+              new RollResultModal(this.app, result, performRoll, showRollNumbers).open();
             };
             performRoll();
           } catch (error) {
             console.error("Error rolling on table:", error);
           }
-        }).open();
+        }, this.roller);
+        selectorModal.open();
+      }
+    });
+    this.addCommand({
+      id: "mark-as-table",
+      name: "Mark current file as table",
+      callback: async () => {
+        const activeFile = this.app.workspace.getActiveFile();
+        if (!activeFile || activeFile.extension !== "md") {
+          console.warn("No active markdown file");
+          return;
+        }
+        try {
+          const content = await this.app.vault.read(activeFile);
+          const lines = content.split("\n");
+          if (lines[0] === "---") {
+            let endIndex = -1;
+            for (let i = 1; i < lines.length; i++) {
+              if (lines[i] === "---") {
+                endIndex = i;
+                break;
+              }
+            }
+            if (endIndex > 0) {
+              let hasProperty = false;
+              for (let i = 1; i < endIndex; i++) {
+                if (lines[i].match(/^table-roller\s*:/)) {
+                  lines[i] = "table-roller: true";
+                  hasProperty = true;
+                  break;
+                }
+              }
+              if (!hasProperty) {
+                lines.splice(endIndex, 0, "table-roller: true");
+              }
+            }
+          } else {
+            lines.unshift("---", "table-roller: true", "---", "");
+          }
+          await this.app.vault.modify(activeFile, lines.join("\n"));
+          console.log("File marked as table-roller");
+        } catch (error) {
+          console.error("Error marking file as table:", error);
+        }
       }
     });
     this.addCommand({

@@ -7,7 +7,7 @@ import { DiceRoller } from './DiceRoller';
  * Core table rolling logic with namespace support
  */
 export class TableRollerCore {
-	private tables: Map<string, { table: Table, namespace: string }> = new Map();
+	private tables: Map<string, { table: Table, namespace: string, file: TFile }> = new Map();
 	private app: App;
 
 	constructor(app: App) {
@@ -44,22 +44,30 @@ export class TableRollerCore {
 		// Store tables with both short name and namespaced name
 		for (const [name, table] of Object.entries(parsed.tables)) {
 			// Store with short name (for same-file references)
-			this.tables.set(name, { table, namespace });
-			
-			// Also store with full namespace (for cross-file references)
-			const fullName = `${namespace}.${name}`;
-			this.tables.set(fullName, { table, namespace });
-		}
+		this.tables.set(name, { table, namespace, file });
+		
+		// Also store with full namespace (for cross-file references)
+		const fullName = `${namespace}.${name}`;
+		this.tables.set(fullName, { table, namespace, file });
+	}
+}
+
+	/**
+	 * Get source file path for a table
+	 */
+	getTableFile(tableName: string, contextNamespace?: string): TFile | undefined {
+		const tableData = this.findTable(tableName, contextNamespace);
+		return tableData?.file;
 	}
 
 	/**
 	 * Get list of all available table names
 	 */
 	getTableNames(): string[] {
-		// Return only non-namespaced names for the picker
+		// Return only non-namespaced, non-private names for the picker
 		const names = new Set<string>();
-		for (const key of this.tables.keys()) {
-			if (!key.includes('.')) {
+		for (const [key, data] of this.tables.entries()) {
+			if (!key.includes('.') && !data.table.private) {
 				names.add(key);
 			}
 		}
@@ -75,19 +83,19 @@ export class TableRollerCore {
 			throw new Error(`Table not found: ${tableName}`);
 		}
 
-		return this.rollOnTable(tableName, tableData.table, tableData.namespace, modifier);
+		return this.rollOnTable(tableName, tableData.table, tableData.namespace, tableData.file.path, modifier);
 	}
 
 	/**
 	 * Roll on a specific table
 	 */
-	private rollOnTable(tableName: string, table: Table, namespace: string, modifier: number = 0): RollResult {
+	private rollOnTable(tableName: string, table: Table, namespace: string, sourceFile: string, modifier: number = 0): RollResult {
 		let result: RollResult;
 
 		if (this.isDiceTable(table)) {
-			result = this.rollDiceTable(tableName, table, namespace, modifier);
+			result = this.rollDiceTable(tableName, table, namespace, sourceFile, modifier);
 		} else {
-			result = this.rollSimpleTable(tableName, table, namespace);
+			result = this.rollSimpleTable(tableName, table, namespace, sourceFile);
 		}
 
 		// Handle table-level reroll (applies to all results)
@@ -106,7 +114,7 @@ export class TableRollerCore {
 	/**
 	 * Roll on a dice-based table
 	 */
-	private rollDiceTable(tableName: string, table: DiceTable, namespace: string, modifier: number = 0): RollResult {
+	private rollDiceTable(tableName: string, table: DiceTable, namespace: string, sourceFile: string, modifier: number = 0): RollResult {
 		const baseRoll = DiceRoller.roll(table.dice);
 		let rollValue = baseRoll + modifier;
 
@@ -126,7 +134,9 @@ export class TableRollerCore {
 			namespace,
 			roll: rollValue,
 			result: entry.result,
-			details: entry.details
+			details: entry.details,
+			columns: entry.columns,
+			sourceFile
 		};
 
 		// Handle per-row reroll
@@ -140,7 +150,7 @@ export class TableRollerCore {
 	/**
 	 * Roll on a simple table (random row selection)
 	 */
-	private rollSimpleTable(tableName: string, table: any, namespace: string): RollResult {
+	private rollSimpleTable(tableName: string, table: any, namespace: string, sourceFile: string): RollResult {
 		const randomIndex = Math.floor(Math.random() * table.rows.length);
 		const row = table.rows[randomIndex];
 
@@ -155,7 +165,8 @@ export class TableRollerCore {
 		return {
 			tableName,
 			namespace,
-			result: resultParts.join('\n')
+			result: resultParts.join('\n'),
+			sourceFile
 		};
 	}
 
@@ -170,7 +181,7 @@ export class TableRollerCore {
 			const tableData = this.findTable(name, contextNamespace);
 			if (tableData) {
 				try {
-					results.push(this.rollOnTable(name, tableData.table, tableData.namespace, modifier));
+					results.push(this.rollOnTable(name, tableData.table, tableData.namespace, tableData.file.path, modifier));
 				} catch (error) {
 					console.warn(`Failed to roll on ${name}:`, error);
 				}
@@ -189,7 +200,7 @@ export class TableRollerCore {
 	 * - Full name (Namespace.TableName)
 	 * - Case-insensitive matching
 	 */
-	private findTable(searchName: string, contextNamespace?: string): { table: Table, namespace: string } | null {
+	private findTable(searchName: string, contextNamespace?: string): { table: Table, namespace: string, file: TFile } | null {
 		// Try exact match first
 		let tableData = this.tables.get(searchName);
 		if (tableData) return tableData;

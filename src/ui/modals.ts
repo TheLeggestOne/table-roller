@@ -1,5 +1,6 @@
-import { App, Modal } from 'obsidian';
+import { App, Modal, TFile } from 'obsidian';
 import { RollResult } from '../types';
+import { TableRollerCore } from '../services/TableRollerCore';
 
 /**
  * Modal for selecting a table to roll on
@@ -7,11 +8,14 @@ import { RollResult } from '../types';
 export class TableSelectorModal extends Modal {
 	private tables: string[];
 	private onSelect: (tableName: string) => void;
+	private roller: TableRollerCore;
+	public showRollNumbers: boolean = false;
 
-	constructor(app: App, tables: string[], onSelect: (tableName: string) => void) {
+	constructor(app: App, tables: string[], onSelect: (tableName: string) => void, roller: TableRollerCore) {
 		super(app);
 		this.tables = tables;
 		this.onSelect = onSelect;
+		this.roller = roller;
 	}
 
 	onOpen() {
@@ -42,6 +46,29 @@ export class TableSelectorModal extends Modal {
 		let useModifiers = false;
 		checkbox.addEventListener('change', () => {
 			useModifiers = checkbox.checked;
+		});
+
+		// Show roll numbers checkbox
+		const rollNumsContainer = contentEl.createEl('div');
+		rollNumsContainer.style.marginTop = '8px';
+		rollNumsContainer.style.marginBottom = '16px';
+		rollNumsContainer.style.padding = '12px';
+		rollNumsContainer.style.backgroundColor = 'var(--background-secondary)';
+		rollNumsContainer.style.borderRadius = '6px';
+
+		const rollNumsLabel = rollNumsContainer.createEl('label');
+		rollNumsLabel.style.display = 'flex';
+		rollNumsLabel.style.alignItems = 'center';
+		rollNumsLabel.style.cursor = 'pointer';
+
+		const rollNumsCheckbox = rollNumsLabel.createEl('input', { type: 'checkbox' });
+		rollNumsCheckbox.style.marginRight = '8px';
+
+		const rollNumsLabelText = rollNumsLabel.createEl('span', { text: 'Show roll numbers' });
+		rollNumsLabelText.style.fontWeight = '500';
+
+		rollNumsCheckbox.addEventListener('change', () => {
+			this.showRollNumbers = rollNumsCheckbox.checked;
 		});
 
 		// Create table list
@@ -105,18 +132,20 @@ export class TableSelectorModal extends Modal {
 export class RollResultModal extends Modal {
 	private result: RollResult;
 	private onReroll?: () => void;
+	private showRollNumbers: boolean;
 
-	constructor(app: App, result: RollResult, onReroll?: () => void) {
+	constructor(app: App, result: RollResult, onReroll?: () => void, showRollNumbers: boolean = false) {
 		super(app);
 		this.result = result;
 		this.onReroll = onReroll;
+		this.showRollNumbers = showRollNumbers;
 	}
 
 	onOpen() {
 		const { contentEl } = this;
 		contentEl.empty();
 
-		this.displayResult(contentEl, this.result, 2);
+		this.displayResult(contentEl, this.result, 2, this.showRollNumbers);
 
 		// Button container
 		const buttonDiv = contentEl.createEl('div', { cls: 'modal-button-container' });
@@ -127,16 +156,32 @@ export class RollResultModal extends Modal {
 
 		// Reroll button (left side)
 		const leftDiv = buttonDiv.createEl('div');
-		if (this.onReroll) {
-			const rerollButton = leftDiv.createEl('button', { text: 'Reroll' });
-			rerollButton.addEventListener('click', () => {
+	leftDiv.style.display = 'flex';
+	leftDiv.style.gap = '8px';
+	
+	if (this.onReroll) {
+		const rerollButton = leftDiv.createEl('button', { text: 'Reroll' });
+		rerollButton.addEventListener('click', () => {
+			this.close();
+			this.onReroll?.();
+		});
+	}
+	
+	// Add source link button
+	if (this.result.sourceFile) {
+		const sourceButton = leftDiv.createEl('button', { text: '\u2192 Source' });
+		sourceButton.setAttribute('aria-label', 'Go to table source');
+		sourceButton.addEventListener('click', async () => {
+			const file = this.app.vault.getAbstractFileByPath(this.result.sourceFile!);
+			if (file && file instanceof TFile) {
+				await this.app.workspace.getLeaf().openFile(file);
 				this.close();
-				this.onReroll?.();
-			});
-		}
-
-		// Right side buttons container
-		const rightDiv = buttonDiv.createEl('div');
+			}
+		});
+	}
+	
+	// Right side buttons container
+	const rightDiv = buttonDiv.createEl('div');
 		rightDiv.style.display = 'flex';
 		rightDiv.style.gap = '8px';
 
@@ -180,17 +225,24 @@ export class RollResultModal extends Modal {
 		}
 		lines.push('');
 
-		// Roll value
-		if (result.roll !== undefined) {
-			lines.push(`**Roll:** ${result.roll}`);
+		// Display dynamic columns if available
+		if (result.columns && Object.keys(result.columns).length > 0) {
+			for (const [header, value] of Object.entries(result.columns)) {
+				if (value && value.trim()) {
+					lines.push(`**${header}:** ${value}`);
+				}
+			}
+		} else {
+			// Fallback to old format
+			lines.push(`**Result:** ${result.result}`);
+			if (result.details) {
+				lines.push(`**Details:** ${result.details}`);
+			}
 		}
 
-		// Result
-		lines.push(`**Result:** ${result.result}`);
-
-		// Details
-		if (result.details) {
-			lines.push(`**Details:** ${result.details}`);
+		// Roll value (if dice-based and showRollNumbers is true)
+		if (this.showRollNumbers && result.roll !== undefined) {
+			lines.push(`**Roll:** ${result.roll}`);
 		}
 
 		// Nested rolls
@@ -206,7 +258,7 @@ export class RollResultModal extends Modal {
 		return lines.join('\n');
 	}
 
-	private displayResult(container: HTMLElement, result: RollResult, headingLevel: number) {
+	private displayResult(container: HTMLElement, result: RollResult, headingLevel: number, showRollNumbers: boolean = false) {
 		// Main result heading
 		const heading = container.createEl(`h${headingLevel}` as any, { text: result.tableName });
 		if (result.namespace) {
@@ -219,23 +271,36 @@ export class RollResultModal extends Modal {
 			namespaceBadge.style.fontWeight = 'normal';
 		}
 
-		// Roll value (if dice-based)
-		if (result.roll !== undefined) {
+		// Display dynamic columns if available
+		if (result.columns && Object.keys(result.columns).length > 0) {
+			for (const [header, value] of Object.entries(result.columns)) {
+				if (value && value.trim()) {
+					const colEl = container.createEl('div', { cls: 'result-column' });
+					colEl.innerHTML = `<strong>${header}:</strong> ${value}`;
+					colEl.style.marginBottom = '8px';
+				}
+			}
+		} else {
+			// Fallback to old format for backward compatibility
+			const resultEl = container.createEl('div', { cls: 'result-text' });
+			resultEl.innerHTML = `<strong>Result:</strong> ${result.result}`;
+			resultEl.style.marginBottom = '8px';
+
+			// Details (if any)
+			if (result.details) {
+				const detailsEl = container.createEl('div', { cls: 'result-details' });
+				detailsEl.innerHTML = `<strong>Details:</strong> ${result.details}`;
+				detailsEl.style.marginBottom = '12px';
+			}
+		}
+
+		// Roll value (if dice-based and showRollNumbers is true)
+		if (showRollNumbers && result.roll !== undefined) {
 			const rollEl = container.createEl('p', { cls: 'roll-value' });
 			rollEl.innerHTML = `<strong>Roll:</strong> ${result.roll}`;
 			rollEl.style.marginBottom = '8px';
-		}
-
-		// Result text
-		const resultEl = container.createEl('div', { cls: 'result-text' });
-		resultEl.innerHTML = `<strong>Result:</strong> ${result.result}`;
-		resultEl.style.marginBottom = '8px';
-
-		// Details (if any)
-		if (result.details) {
-			const detailsEl = container.createEl('div', { cls: 'result-details' });
-			detailsEl.innerHTML = `<strong>Details:</strong> ${result.details}`;
-			detailsEl.style.marginBottom = '12px';
+			rollEl.style.opacity = '0.7';
+			rollEl.style.fontSize = '0.9em';
 		}
 
 		// Nested rolls
@@ -255,7 +320,7 @@ export class RollResultModal extends Modal {
 				nestedDiv.style.borderLeft = '3px solid var(--background-modifier-border)';
 				nestedDiv.style.marginTop = '12px';
 
-				this.displayResult(nestedDiv, nested, Math.min(headingLevel + 1, 6));
+				this.displayResult(nestedDiv, nested, Math.min(headingLevel + 1, 6), showRollNumbers);
 			}
 		}
 	}
