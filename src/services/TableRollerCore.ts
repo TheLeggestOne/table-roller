@@ -100,7 +100,7 @@ export class TableRollerCore {
 
 		// Handle table-level reroll (applies to all results)
 		if (table.reroll) {
-			const tableRerolls = this.resolveRerolls(table.reroll, namespace, modifier);
+			const tableRerolls = this.resolveRerolls(table.reroll, namespace, 0);
 			if (result.nestedRolls) {
 				result.nestedRolls.push(...tableRerolls);
 			} else {
@@ -141,7 +141,7 @@ export class TableRollerCore {
 
 		// Handle per-row reroll
 		if (entry.reroll) {
-			result.nestedRolls = this.resolveRerolls(entry.reroll, namespace, modifier);
+			result.nestedRolls = this.resolveRerolls(entry.reroll, namespace, 0);
 		}
 
 		return result;

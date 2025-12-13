@@ -375,7 +375,7 @@ var TableRollerCore = class {
       result = this.rollSimpleTable(tableName, table, namespace, sourceFile);
     }
     if (table.reroll) {
-      const tableRerolls = this.resolveRerolls(table.reroll, namespace, modifier);
+      const tableRerolls = this.resolveRerolls(table.reroll, namespace, 0);
       if (result.nestedRolls) {
         result.nestedRolls.push(...tableRerolls);
       } else {
@@ -407,7 +407,7 @@ var TableRollerCore = class {
       sourceFile
     };
     if (entry.reroll) {
-      result.nestedRolls = this.resolveRerolls(entry.reroll, namespace, modifier);
+      result.nestedRolls = this.resolveRerolls(entry.reroll, namespace, 0);
     }
     return result;
   }
