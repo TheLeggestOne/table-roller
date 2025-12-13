@@ -170,8 +170,8 @@ export class TableParser {
 	 * Process parsed table into dice or simple format
 	 */
 	private static processTable(parsed: { headers: string[], rows: Record<string, string>[] }, tableReroll?: string, tablePrivate?: boolean): Table {
-		// Check if table has a dice column
-		const diceHeader = parsed.headers.find(h => /^d\d+$/i.test(h.trim()));
+		// Check if table has a dice column (supports both dX and ndX formats)
+		const diceHeader = parsed.headers.find(h => /^\d*d\d+$/i.test(h.trim()));
 
 		if (diceHeader) {
 			// Convert to dice table format

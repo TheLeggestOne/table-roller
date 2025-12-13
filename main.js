@@ -160,7 +160,7 @@ var TableParser = class {
    * Process parsed table into dice or simple format
    */
   static processTable(parsed, tableReroll, tablePrivate) {
-    const diceHeader = parsed.headers.find((h) => /^d\d+$/i.test(h.trim()));
+    const diceHeader = parsed.headers.find((h) => /^\d*d\d+$/i.test(h.trim()));
     if (diceHeader) {
       return this.processDiceTable(parsed, diceHeader, tableReroll, tablePrivate);
     } else {
