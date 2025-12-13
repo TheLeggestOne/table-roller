@@ -44,3 +44,89 @@ export interface ParsedTable {
 	isTableFile: boolean;
 	namespace: string;
 }
+
+/**
+ * Configuration for a column in the table builder
+ */
+export interface ColumnConfig {
+	name: string;
+	type: 'dice' | 'regular' | 'reroll';
+	diceNotation?: string; // e.g., 'd6', '2d6', 'd100'
+}
+
+/**
+ * Data for a single row in the table builder
+ */
+export interface RowData {
+	range?: string; // For dice columns
+	[columnName: string]: string | undefined;
+}
+
+/**
+ * Complete state of the table builder
+ */
+export interface TableState {
+	tableName: string;
+	columns: ColumnConfig[];
+	rows: RowData[];
+	isPrivate: boolean;
+	tableReroll?: string;
+}
+
+/**
+ * History entry for undo/redo functionality
+ */
+export interface HistoryEntry {
+	state: TableState;
+	timestamp: number;
+}
+
+/**
+ * Event detail types for table builder custom events
+ */
+export interface ColumnAddedEventDetail {
+	column: ColumnConfig;
+	index: number;
+}
+
+export interface ColumnRemovedEventDetail {
+	columnName: string;
+	index: number;
+}
+
+export interface ColumnReorderedEventDetail {
+	fromIndex: number;
+	toIndex: number;
+}
+
+export interface RowAddedEventDetail {
+	row: RowData;
+	index: number;
+}
+
+export interface RowRemovedEventDetail {
+	index: number;
+}
+
+export interface RowUpdatedEventDetail {
+	index: number;
+	row: RowData;
+}
+
+export interface RowSelectedEventDetail {
+	index: number;
+}
+
+export interface CellEditedEventDetail {
+	rowIndex: number;
+	columnName: string;
+	value: string;
+}
+
+export interface StateChangedEventDetail {
+	state: TableState;
+}
+
+export interface PreviewRequestEventDetail {
+	debounce: boolean;
+}

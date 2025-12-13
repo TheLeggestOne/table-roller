@@ -25,23 +25,16 @@ export class TableSelectorModal extends Modal {
 		contentEl.createEl('h2', { text: 'Select a table to roll on' });
 
 		// Modifier checkbox
-		const checkboxContainer = contentEl.createEl('div');
-		checkboxContainer.style.marginTop = '12px';
-		checkboxContainer.style.marginBottom = '16px';
-		checkboxContainer.style.padding = '12px';
-		checkboxContainer.style.backgroundColor = 'var(--background-secondary)';
-		checkboxContainer.style.borderRadius = '6px';
+		const checkboxContainer = contentEl.createEl('div', { cls: 'modal-checkbox-container' });
 
-		const checkboxLabel = checkboxContainer.createEl('label');
-		checkboxLabel.style.display = 'flex';
-		checkboxLabel.style.alignItems = 'center';
-		checkboxLabel.style.cursor = 'pointer';
+		const checkboxLabel = checkboxContainer.createEl('label', { cls: 'modal-checkbox-label' });
 
-		const checkbox = checkboxLabel.createEl('input', { type: 'checkbox' });
-		checkbox.style.marginRight = '8px';
+		const checkbox = checkboxLabel.createEl('input', { type: 'checkbox', cls: 'modal-checkbox' });
 
-		const labelText = checkboxLabel.createEl('span', { text: 'Roll with modifiers' });
-		labelText.style.fontWeight = '500';
+		const labelText = checkboxLabel.createEl('span', { 
+			text: 'Roll with modifiers',
+			cls: 'modal-checkbox-text'
+		});
 
 		let useModifiers = false;
 		checkbox.addEventListener('change', () => {
@@ -49,51 +42,29 @@ export class TableSelectorModal extends Modal {
 		});
 
 		// Show roll numbers checkbox
-		const rollNumsContainer = contentEl.createEl('div');
-		rollNumsContainer.style.marginTop = '8px';
-		rollNumsContainer.style.marginBottom = '16px';
-		rollNumsContainer.style.padding = '12px';
-		rollNumsContainer.style.backgroundColor = 'var(--background-secondary)';
-		rollNumsContainer.style.borderRadius = '6px';
+		const rollNumsContainer = contentEl.createEl('div', { cls: 'modal-checkbox-container' });
 
-		const rollNumsLabel = rollNumsContainer.createEl('label');
-		rollNumsLabel.style.display = 'flex';
-		rollNumsLabel.style.alignItems = 'center';
-		rollNumsLabel.style.cursor = 'pointer';
+		const rollNumsLabel = rollNumsContainer.createEl('label', { cls: 'modal-checkbox-label' });
 
-		const rollNumsCheckbox = rollNumsLabel.createEl('input', { type: 'checkbox' });
-		rollNumsCheckbox.style.marginRight = '8px';
+		const rollNumsCheckbox = rollNumsLabel.createEl('input', { type: 'checkbox', cls: 'modal-checkbox' });
 
-		const rollNumsLabelText = rollNumsLabel.createEl('span', { text: 'Show roll numbers' });
-		rollNumsLabelText.style.fontWeight = '500';
+		const rollNumsLabelText = rollNumsLabel.createEl('span', { 
+			text: 'Show roll numbers',
+			cls: 'modal-checkbox-text'
+		});
 
 		rollNumsCheckbox.addEventListener('change', () => {
 			this.showRollNumbers = rollNumsCheckbox.checked;
 		});
 
 		// Create table list
-		const listEl = contentEl.createEl('div', { cls: 'table-list' });
-		listEl.style.display = 'flex';
-		listEl.style.flexDirection = 'column';
-		listEl.style.gap = '8px';
-		listEl.style.marginTop = '16px';
+		const listEl = contentEl.createEl('div', { cls: 'modal-table-list' });
 
 		for (const tableName of this.tables) {
 			const buttonEl = listEl.createEl('button', {
 				text: tableName,
-				cls: 'table-button'
+				cls: 'modal-table-button'
 			});
-
-			buttonEl.style.padding = '12px 16px';
-			buttonEl.style.cursor = 'pointer';
-			buttonEl.style.borderRadius = '6px';
-			buttonEl.style.border = '1px solid var(--background-modifier-border)';
-			buttonEl.style.backgroundColor = 'var(--interactive-normal)';
-			buttonEl.style.color = 'var(--text-normal)';
-			buttonEl.style.textAlign = 'left';
-			buttonEl.style.fontSize = '14px';
-			buttonEl.style.fontWeight = '500';
-			buttonEl.style.transition = 'all 0.15s ease';
 
 			buttonEl.addEventListener('click', () => {
 				if (useModifiers) {
@@ -104,18 +75,6 @@ export class TableSelectorModal extends Modal {
 					this.onSelect(tableName);
 				}
 				this.close();
-			});
-
-			buttonEl.addEventListener('mouseenter', () => {
-				buttonEl.style.backgroundColor = 'var(--interactive-hover)';
-				buttonEl.style.borderColor = 'var(--interactive-accent)';
-				buttonEl.style.transform = 'translateX(4px)';
-			});
-
-			buttonEl.addEventListener('mouseleave', () => {
-				buttonEl.style.backgroundColor = 'var(--interactive-normal)';
-				buttonEl.style.borderColor = 'var(--background-modifier-border)';
-				buttonEl.style.transform = 'translateX(0)';
 			});
 		}
 	}
@@ -149,28 +108,20 @@ export class RollResultModal extends Modal {
 
 		// Button container
 		const buttonDiv = contentEl.createEl('div', { cls: 'modal-button-container' });
-		buttonDiv.style.marginTop = '20px';
-		buttonDiv.style.display = 'flex';
-		buttonDiv.style.justifyContent = 'space-between';
-		buttonDiv.style.gap = '8px';
 
 		// Reroll button (left side)
-		const leftDiv = buttonDiv.createEl('div');
-	leftDiv.style.display = 'flex';
-	leftDiv.style.gap = '8px';
+		const leftDiv = buttonDiv.createEl('div', { cls: 'modal-button-group' });
 	
-	if (this.onReroll) {
-		const rerollButton = leftDiv.createEl('button', { text: 'Reroll' });
-		rerollButton.addEventListener('click', () => {
-			this.close();
-			this.onReroll?.();
-		});
-	}
+		if (this.onReroll) {
+			const rerollButton = leftDiv.createEl('button', { text: 'Reroll' });
+			rerollButton.addEventListener('click', () => {
+				this.close();
+				this.onReroll?.();
+			});
+		}
 	
-	// Right side buttons container
-	const rightDiv = buttonDiv.createEl('div');
-		rightDiv.style.display = 'flex';
-		rightDiv.style.gap = '8px';
+		// Right side buttons container
+		const rightDiv = buttonDiv.createEl('div', { cls: 'modal-button-group' });
 
 		// Copy to clipboard button
 		const copyButton = rightDiv.createEl('button', { text: 'Copy to Clipboard' });
@@ -250,21 +201,16 @@ export class RollResultModal extends Modal {
 		const heading = container.createEl(`h${headingLevel}` as any, { text: result.tableName });
 		if (result.namespace) {
 			const namespaceBadge = heading.createEl('span', { 
-				cls: 'namespace-badge'
+				cls: 'modal-namespace-badge'
 			});
-			namespaceBadge.style.fontSize = '0.8em';
-			namespaceBadge.style.opacity = '0.7';
-			namespaceBadge.style.fontWeight = 'normal';
 			
 			// Create clickable link if source file exists
 			if (result.sourceFile) {
 				const link = namespaceBadge.createEl('a', { 
 					text: ` [${result.namespace}]`,
-					href: '#'
+					href: '#',
+					cls: 'modal-namespace-link'
 				});
-				link.style.cursor = 'pointer';
-				link.style.color = 'var(--text-accent)';
-				link.style.textDecoration = 'none';
 				link.addEventListener('click', async (e: MouseEvent) => {
 					e.preventDefault();
 					const file = this.app.vault.getAbstractFileByPath(result.sourceFile!);
@@ -272,12 +218,6 @@ export class RollResultModal extends Modal {
 						await this.app.workspace.getLeaf().openFile(file);
 						this.close();
 					}
-				});
-				link.addEventListener('mouseenter', () => {
-					link.style.textDecoration = 'underline';
-				});
-				link.addEventListener('mouseleave', () => {
-					link.style.textDecoration = 'none';
 				});
 			} else {
 				namespaceBadge.textContent = ` [${result.namespace}]`;
@@ -288,51 +228,37 @@ export class RollResultModal extends Modal {
 		if (result.columns && Object.keys(result.columns).length > 0) {
 			for (const [header, value] of Object.entries(result.columns)) {
 				if (value && value.trim()) {
-					const colEl = container.createEl('div', { cls: 'result-column' });
+					const colEl = container.createEl('div', { cls: 'modal-result-column' });
 					colEl.innerHTML = `<strong>${header}:</strong> ${value}`;
-					colEl.style.marginBottom = '8px';
 				}
 			}
 		} else {
 			// Fallback to old format for backward compatibility
-			const resultEl = container.createEl('div', { cls: 'result-text' });
+			const resultEl = container.createEl('div', { cls: 'modal-result-text' });
 			resultEl.innerHTML = `<strong>Result:</strong> ${result.result}`;
-			resultEl.style.marginBottom = '8px';
 
 			// Details (if any)
 			if (result.details) {
-				const detailsEl = container.createEl('div', { cls: 'result-details' });
+				const detailsEl = container.createEl('div', { cls: 'modal-result-details' });
 				detailsEl.innerHTML = `<strong>Details:</strong> ${result.details}`;
-				detailsEl.style.marginBottom = '12px';
 			}
 		}
 
 		// Roll value (if dice-based and showRollNumbers is true)
 		if (showRollNumbers && result.roll !== undefined) {
-			const rollEl = container.createEl('p', { cls: 'roll-value' });
+			const rollEl = container.createEl('p', { cls: 'modal-roll-value' });
 			rollEl.innerHTML = `<strong>Roll:</strong> ${result.roll}`;
-			rollEl.style.marginBottom = '8px';
-			rollEl.style.opacity = '0.7';
-			rollEl.style.fontSize = '0.9em';
 		}
 
 		// Nested rolls
 		if (result.nestedRolls && result.nestedRolls.length > 0) {
 			const nestedHeader = container.createEl('p', { 
 				text: 'Referenced Tables:',
-				cls: 'nested-header'
+				cls: 'modal-nested-header'
 			});
-			nestedHeader.style.fontWeight = 'bold';
-			nestedHeader.style.marginTop = '12px';
-			nestedHeader.style.marginBottom = '8px';
 
 			for (const nested of result.nestedRolls) {
-				const nestedDiv = container.createEl('div', { cls: 'nested-roll' });
-				nestedDiv.style.marginLeft = '20px';
-				nestedDiv.style.paddingLeft = '12px';
-				nestedDiv.style.borderLeft = '3px solid var(--background-modifier-border)';
-				nestedDiv.style.marginTop = '12px';
-
+				const nestedDiv = container.createEl('div', { cls: 'modal-nested-roll' });
 				this.displayResult(nestedDiv, nested, Math.min(headingLevel + 1, 6), showRollNumbers);
 			}
 		}
@@ -364,70 +290,50 @@ export class ModifierPreviewModal extends Modal {
 		contentEl.createEl('h2', { text: 'Configure Roll Modifiers' });
 
 		const infoText = contentEl.createEl('p', { 
-			text: 'Add modifiers to dice rolls. Note: Modifiers only apply to dice-based tables (d6, d20, etc.).'
+			text: 'Add modifiers to dice rolls. Note: Modifiers only apply to dice-based tables (d6, d20, etc.).',
+			cls: 'modal-info-text'
 		});
-		infoText.style.fontSize = '13px';
-		infoText.style.opacity = '0.8';
-		infoText.style.marginBottom = '16px';
 
 		// Main table modifier
-		const mainTableDiv = contentEl.createEl('div');
-		mainTableDiv.style.marginBottom = '20px';
+		const mainTableDiv = contentEl.createEl('div', { cls: 'modal-modifier-section' });
 
-		const mainLabel = mainTableDiv.createEl('div');
-		mainLabel.style.fontWeight = '600';
-		mainLabel.style.marginBottom = '8px';
-		mainLabel.style.fontSize = '15px';
+		const mainLabel = mainTableDiv.createEl('div', { cls: 'modal-modifier-label' });
 		mainLabel.createEl('span', { text: `${this.tableName}` });
 		
-		const mainBadge = mainLabel.createEl('span', { text: ' [Main Table]' });
-		mainBadge.style.fontSize = '12px';
-		mainBadge.style.opacity = '0.7';
-		mainBadge.style.fontWeight = 'normal';
+		const mainBadge = mainLabel.createEl('span', { 
+			text: ' [Main Table]',
+			cls: 'modal-modifier-badge'
+		});
 
-		const mainInputContainer = mainTableDiv.createEl('div');
-		mainInputContainer.style.display = 'flex';
-		mainInputContainer.style.alignItems = 'center';
-		mainInputContainer.style.gap = '8px';
+		const mainInputContainer = mainTableDiv.createEl('div', { cls: 'modal-input-container' });
 
 		const mainInput = mainInputContainer.createEl('input', {
 			type: 'number',
-			placeholder: '0'
+			placeholder: '0',
+			cls: 'modal-modifier-input'
 		});
-		mainInput.style.width = '100px';
-		mainInput.style.padding = '8px 12px';
-		mainInput.style.borderRadius = '4px';
-		mainInput.style.border = '1px solid var(--background-modifier-border)';
-		mainInput.style.fontSize = '14px';
 		mainInput.value = '0';
 
-		mainInputContainer.createEl('span', { 
-			text: 'Modifier (e.g., +2 or -3)' 
-		}).style.opacity = '0.7';
+		const inputHint = mainInputContainer.createEl('span', { 
+			text: 'Modifier (e.g., +2 or -3)',
+			cls: 'modal-input-hint'
+		});
 
 		// Note about nested tables
-		const noteDiv = contentEl.createEl('div');
-		noteDiv.style.marginTop = '16px';
-		noteDiv.style.padding = '12px';
-		noteDiv.style.backgroundColor = 'var(--background-secondary)';
-		noteDiv.style.borderRadius = '6px';
-		noteDiv.style.fontSize = '13px';
-
+		const noteDiv = contentEl.createEl('div', { cls: 'modal-note' });
 		const noteIcon = noteDiv.createEl('span', { text: '💡 ' });
 		noteDiv.createEl('span', { 
 			text: 'Additional tables from rerolls will use this same modifier. Future updates may allow per-table modifiers for nested rolls.'
 		});
 
 		// Button container
-		const buttonDiv = contentEl.createEl('div');
-		buttonDiv.style.marginTop = '24px';
-		buttonDiv.style.display = 'flex';
-		buttonDiv.style.justifyContent = 'flex-end';
-		buttonDiv.style.gap = '8px';
+		const buttonDiv = contentEl.createEl('div', { cls: 'modal-button-container' });
 
 		// Roll button
-		const rollButton = buttonDiv.createEl('button', { text: 'Roll' });
-		rollButton.style.fontWeight = '600';
+		const rollButton = buttonDiv.createEl('button', { 
+			text: 'Roll',
+			cls: 'modal-button-primary'
+		});
 		rollButton.addEventListener('click', () => {
 			const modifier = parseInt(mainInput.value) || 0;
 			// Store modifier in a way the roller can access it
@@ -472,35 +378,26 @@ export class SaveFileModal extends Modal {
 		contentEl.createEl('h2', { text: 'Save to file' });
 
 		// Filename input
-		const inputContainer = contentEl.createEl('div');
-		inputContainer.style.marginTop = '16px';
-		inputContainer.style.marginBottom = '16px';
+		const inputContainer = contentEl.createEl('div', { cls: 'modal-input-section' });
 
-		const label = inputContainer.createEl('label', { text: 'Filename:' });
-		label.style.display = 'block';
-		label.style.marginBottom = '8px';
-		label.style.fontWeight = '500';
+		const label = inputContainer.createEl('label', { 
+			text: 'Filename:',
+			cls: 'modal-label'
+		});
 
 		const input = inputContainer.createEl('input', {
 			type: 'text',
-			value: this.defaultFilename
+			value: this.defaultFilename,
+			cls: 'modal-filename-input'
 		});
-		input.style.width = '100%';
-		input.style.padding = '8px 12px';
-		input.style.borderRadius = '4px';
-		input.style.border = '1px solid var(--background-modifier-border)';
-		input.style.fontSize = '14px';
 
-		const extension = inputContainer.createEl('span', { text: '.md' });
-		extension.style.marginLeft = '4px';
-		extension.style.opacity = '0.7';
+		const extension = inputContainer.createEl('span', { 
+			text: '.md',
+			cls: 'modal-extension'
+		});
 
 		// Button container
-		const buttonDiv = contentEl.createEl('div');
-		buttonDiv.style.marginTop = '20px';
-		buttonDiv.style.display = 'flex';
-		buttonDiv.style.justifyContent = 'flex-end';
-		buttonDiv.style.gap = '8px';
+		const buttonDiv = contentEl.createEl('div', { cls: 'modal-button-container' });
 
 		// Save button
 		const saveButton = buttonDiv.createEl('button', { text: 'Save' });
@@ -564,20 +461,15 @@ export class ErrorModal extends Modal {
 
 		contentEl.createEl('h2', { text: this.title });
 
-		const messageContainer = contentEl.createDiv();
-		messageContainer.style.marginTop = '16px';
-		messageContainer.style.marginBottom = '24px';
-		messageContainer.style.lineHeight = '1.6';
-		messageContainer.style.whiteSpace = 'pre-wrap';
+		const messageContainer = contentEl.createDiv({ cls: 'modal-error-message' });
 		messageContainer.setText(this.message);
 
-		const buttonContainer = contentEl.createDiv();
-		buttonContainer.style.display = 'flex';
-		buttonContainer.style.justifyContent = 'center';
-		buttonContainer.style.marginTop = '24px';
+		const buttonContainer = contentEl.createDiv({ cls: 'modal-button-container modal-button-centered' });
 
-		const closeButton = buttonContainer.createEl('button', { text: 'OK' });
-		closeButton.style.padding = '8px 24px';
+		const closeButton = buttonContainer.createEl('button', { 
+			text: 'OK',
+			cls: 'modal-button-ok'
+		});
 		closeButton.addEventListener('click', () => {
 			this.close();
 		});

@@ -1,1 +1,1029 @@
-/* Styles for Table Roller plugin */
+/* ============================================
+   TABLE ROLLER - COMPREHENSIVE STYLES
+   ============================================ */
+
+/* ============================================
+   TABLE BUILDER VIEW - MAIN LAYOUT
+   ============================================ */
+
+.table-builder-view {
+	height: 100%;
+	overflow: hidden;
+}
+
+.table-builder-split {
+	display: flex;
+	height: 100%;
+	gap: 16px;
+	padding: 16px;
+}
+
+.table-builder-left-panel {
+	flex: 1;
+	overflow-y: auto;
+	padding-right: 8px;
+}
+
+.table-builder-right-panel {
+	flex: 1;
+	display: flex;
+	flex-direction: column;
+	overflow: hidden;
+}
+
+/* ============================================
+   TOOLBAR
+   ============================================ */
+
+.table-builder-toolbar {
+	display: flex;
+	gap: 8px;
+	margin-bottom: 16px;
+	flex-wrap: wrap;
+}
+
+/* ============================================
+   BUTTONS - BASE STYLES
+   ============================================ */
+
+.table-builder-btn {
+	padding: 6px 12px;
+	border-radius: 4px;
+	border: 1px solid var(--background-modifier-border);
+	background: var(--interactive-normal);
+	cursor: pointer;
+	font-size: 13px;
+}
+
+.table-builder-btn:hover {
+	background: var(--interactive-hover);
+}
+
+.table-builder-btn-small {
+	padding: 4px 8px;
+	border-radius: 3px;
+	border: 1px solid var(--background-modifier-border);
+	background: var(--interactive-normal);
+	cursor: pointer;
+	font-size: 12px;
+}
+
+.table-builder-btn-small:hover {
+	background: var(--interactive-hover);
+}
+
+/* ============================================
+   SECTIONS - LAYOUT CONTAINERS
+   ============================================ */
+
+.table-builder-section {
+	margin-bottom: 24px;
+}
+
+.table-builder-section h3 {
+	margin: 0 0 12px 0;
+	font-size: 14px;
+	font-weight: 600;
+}
+
+.table-builder-section label {
+	display: block;
+	margin-bottom: 6px;
+	font-size: 13px;
+}
+
+.table-builder-section input[type="text"] {
+	width: 100%;
+	padding: 6px 8px;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 4px;
+	background: var(--background-primary);
+}
+
+/* ============================================
+   COLUMNS EDITOR
+   ============================================ */
+
+.columns-list {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+	margin-bottom: 12px;
+}
+
+.column-item {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding: 8px;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 4px;
+	background: var(--background-secondary);
+}
+
+.drag-handle {
+	cursor: move;
+	color: var(--text-muted);
+	user-select: none;
+}
+
+.column-item input {
+	flex: 1;
+	padding: 4px 8px;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 3px;
+	background: var(--background-primary);
+}
+
+.column-type {
+	font-size: 11px;
+	color: var(--text-muted);
+}
+
+.delete-btn {
+	padding: 2px 8px;
+	border: none;
+	background: var(--background-modifier-error);
+	color: var(--text-on-accent);
+	border-radius: 3px;
+	cursor: pointer;
+	font-size: 16px;
+	line-height: 1;
+}
+
+.delete-btn:hover {
+	background: var(--background-modifier-error-hover);
+	opacity: 0.9;
+}
+
+.add-column-btns {
+	display: flex;
+	gap: 8px;
+	flex-wrap: wrap;
+}
+
+/* ============================================
+   DIRECTIVES EDITOR
+   ============================================ */
+
+.directive-item {
+	margin-bottom: 12px;
+}
+
+.directive-item label {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	font-size: 13px;
+}
+
+.directive-item input[type="checkbox"] {
+	margin: 0;
+	cursor: pointer;
+}
+
+.directive-item input[type="text"] {
+	width: 100%;
+	padding: 6px 8px;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 4px;
+	background: var(--background-primary);
+	font-size: 13px;
+}
+
+/* ============================================
+   ROW GRID - TABLE EDITOR
+   ============================================ */
+
+.table-builder-row-grid {
+	margin-bottom: 12px;
+}
+
+.row-grid-header,
+.row-grid-row {
+	display: grid;
+	grid-template-columns: 40px repeat(auto-fit, minmax(100px, 1fr)) auto;
+	gap: 4px;
+	margin-bottom: 4px;
+	align-items: center;
+}
+
+.row-grid-header {
+	font-weight: 600;
+	border-bottom: 2px solid var(--background-modifier-border);
+	padding-bottom: 4px;
+	margin-bottom: 8px;
+}
+
+.row-number {
+	text-align: center;
+	padding: 6px;
+	color: var(--text-muted);
+	cursor: pointer;
+	font-size: 12px;
+	user-select: none;
+}
+
+.row-number:hover {
+	background: var(--background-modifier-hover);
+	border-radius: 3px;
+}
+
+.row-grid-row {
+	transition: background 0.1s ease;
+}
+
+.row-grid-row.selected {
+	background: var(--background-modifier-hover);
+	border-radius: 4px;
+}
+
+.row-grid-row:hover {
+	background: var(--background-modifier-hover);
+	border-radius: 4px;
+}
+
+.grid-cell {
+	padding: 2px;
+}
+
+.grid-cell input {
+	width: 100%;
+	padding: 4px 6px;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 3px;
+	background: var(--background-primary);
+	font-size: 13px;
+}
+
+.grid-cell input:focus {
+	outline: none;
+	border-color: var(--interactive-accent);
+	box-shadow: 0 0 0 1px var(--interactive-accent);
+}
+
+/* ============================================
+   ROW ACTIONS
+   ============================================ */
+
+.row-actions {
+	display: flex;
+	gap: 4px;
+	padding: 2px;
+}
+
+.row-action-btn {
+	padding: 4px 8px;
+	border: 1px solid var(--background-modifier-border);
+	background: var(--background-secondary);
+	border-radius: 3px;
+	cursor: pointer;
+	font-size: 14px;
+	line-height: 1;
+	transition: all 0.1s ease;
+}
+
+.row-action-btn:hover {
+	background: var(--interactive-hover);
+	border-color: var(--interactive-accent);
+}
+
+.row-delete-btn:hover {
+	background: var(--background-modifier-error);
+	color: var(--text-on-accent);
+	border-color: var(--background-modifier-error);
+}
+
+/* ============================================
+   CONTEXT MENU
+   ============================================ */
+
+.column-context-menu {
+	position: fixed;
+	z-index: 10000;
+	background: var(--background-secondary);
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 4px;
+	padding: 4px;
+	min-width: 150px;
+	box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+}
+
+.context-menu-item {
+	padding: 6px 12px;
+	cursor: pointer;
+	border-radius: 3px;
+	font-size: 13px;
+	transition: background 0.1s ease;
+}
+
+.context-menu-item:hover {
+	background: var(--background-modifier-hover);
+}
+
+/* ============================================
+   EXAMPLES SIDEBAR
+   ============================================ */
+
+.examples-sidebar {
+	margin-top: 24px;
+	padding-top: 16px;
+	border-top: 1px solid var(--background-modifier-border);
+}
+
+.examples-sidebar details {
+	cursor: pointer;
+}
+
+.examples-sidebar summary {
+	font-weight: 600;
+	font-size: 13px;
+	padding: 4px 0;
+	user-select: none;
+}
+
+.examples-sidebar summary:hover {
+	color: var(--interactive-accent);
+}
+
+.examples-content {
+	padding: 12px 0;
+}
+
+.examples-content h4 {
+	margin: 8px 0;
+	font-size: 13px;
+	font-weight: 600;
+}
+
+.example-btn {
+	display: block;
+	width: 100%;
+	text-align: left;
+	padding: 6px 12px;
+	margin-bottom: 4px;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 4px;
+	background: var(--background-secondary);
+	cursor: pointer;
+	font-size: 12px;
+	transition: all 0.1s ease;
+}
+
+.example-btn:hover {
+	background: var(--background-modifier-hover);
+	border-color: var(--interactive-accent);
+}
+
+.placeholder-text {
+	font-size: 12px;
+	color: var(--text-muted);
+	font-style: italic;
+	margin: 8px 0;
+}
+
+/* ============================================
+   PREVIEW PANEL - RIGHT SIDE
+   ============================================ */
+
+.preview-tabs {
+	display: flex;
+	gap: 4px;
+	margin-bottom: 12px;
+	border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.tab-btn {
+	padding: 8px 16px;
+	border: none;
+	background: transparent;
+	cursor: pointer;
+	border-bottom: 2px solid transparent;
+	font-size: 13px;
+	transition: all 0.2s ease;
+}
+
+.tab-btn:hover {
+	background: var(--background-modifier-hover);
+}
+
+.tab-btn.active {
+	border-bottom-color: var(--interactive-accent);
+	font-weight: 600;
+}
+
+.preview-container {
+	flex: 1;
+	overflow-y: auto;
+	position: relative;
+	background: var(--background-primary);
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 4px;
+}
+
+.markdown-preview,
+.html-preview {
+	display: none;
+	padding: 12px;
+}
+
+.markdown-preview.active,
+.html-preview.active {
+	display: block;
+}
+
+.markdown-preview pre {
+	background: var(--background-secondary);
+	padding: 12px;
+	border-radius: 4px;
+	overflow-x: auto;
+	margin: 0;
+}
+
+.markdown-preview code {
+	font-family: var(--font-monospace);
+	font-size: 12px;
+	white-space: pre;
+	line-height: 1.5;
+}
+
+/* ============================================
+   HTML PREVIEW - TABLE STYLING
+   ============================================ */
+
+.html-preview h2 {
+	margin: 0 0 16px 0;
+	font-size: 18px;
+	font-weight: 600;
+}
+
+.preview-table {
+	width: 100%;
+	border-collapse: collapse;
+	margin-top: 12px;
+}
+
+.preview-table th,
+.preview-table td {
+	border: 1px solid var(--background-modifier-border);
+	padding: 8px;
+	text-align: left;
+}
+
+.preview-table th {
+	background: var(--background-secondary);
+	font-weight: 600;
+	font-size: 13px;
+}
+
+.preview-table td {
+	font-size: 13px;
+}
+
+.preview-table tbody tr:hover {
+	background: var(--background-modifier-hover);
+}
+
+.directives-info {
+	margin-bottom: 12px;
+	display: flex;
+	gap: 8px;
+	flex-wrap: wrap;
+}
+
+.badge {
+	padding: 4px 8px;
+	border-radius: 4px;
+	background: var(--background-secondary);
+	border: 1px solid var(--background-modifier-border);
+	font-size: 11px;
+	font-weight: 500;
+}
+
+/* ============================================
+   EXPORT BUTTONS
+   ============================================ */
+
+.export-buttons {
+	display: flex;
+	gap: 8px;
+	flex-wrap: wrap;
+	padding: 12px;
+	border-top: 1px solid var(--background-modifier-border);
+	background: var(--background-primary);
+}
+
+.export-format {
+	padding: 6px 12px;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 4px;
+	background: var(--background-primary);
+	cursor: pointer;
+	font-size: 13px;
+}
+
+.export-format:hover {
+	border-color: var(--interactive-accent);
+}
+
+/* ============================================
+   MODAL STYLES
+   ============================================ */
+
+.modal.table-roller-modal .modal-content {
+	max-width: 600px;
+}
+
+.modal.table-roller-modal .modal-title {
+	font-size: 18px;
+	font-weight: 600;
+	margin-bottom: 16px;
+}
+
+/* Modal Button Container */
+.modal-button-container {
+	display: flex;
+	justify-content: space-between;
+	gap: 8px;
+	margin-top: 20px;
+}
+
+.modal-button-container button {
+	padding: 6px 16px;
+	border-radius: 4px;
+	border: 1px solid var(--background-modifier-border);
+	background: var(--interactive-normal);
+	cursor: pointer;
+	font-size: 13px;
+}
+
+.modal-button-container button:hover {
+	background: var(--interactive-hover);
+}
+
+.modal-button-container button.mod-warning {
+	background: var(--background-modifier-error);
+	color: var(--text-on-accent);
+	border-color: var(--background-modifier-error);
+}
+
+.modal-button-container button.mod-warning:hover {
+	opacity: 0.9;
+}
+
+/* Button Groups */
+.modal-button-group {
+	display: flex;
+	gap: 8px;
+}
+
+.modal-button-centered {
+	justify-content: center;
+}
+
+/* Primary Button */
+.modal-button-primary {
+	font-weight: 600;
+}
+
+.modal-button-ok {
+	padding: 8px 24px;
+}
+
+/* Table Selector Modal */
+.modal-checkbox-container {
+	margin-top: 8px;
+	margin-bottom: 16px;
+	padding: 12px;
+	background-color: var(--background-secondary);
+	border-radius: 6px;
+}
+
+.modal-checkbox-container:first-of-type {
+	margin-top: 12px;
+}
+
+.modal-checkbox-label {
+	display: flex;
+	align-items: center;
+	cursor: pointer;
+}
+
+.modal-checkbox {
+	margin-right: 8px;
+}
+
+.modal-checkbox-text {
+	font-weight: 500;
+}
+
+.modal-table-list {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+	margin-top: 16px;
+}
+
+.modal-table-button {
+	padding: 12px 16px;
+	cursor: pointer;
+	border-radius: 6px;
+	border: 1px solid var(--background-modifier-border);
+	background-color: var(--interactive-normal);
+	color: var(--text-normal);
+	text-align: left;
+	font-size: 14px;
+	font-weight: 500;
+	transition: all 0.15s ease;
+}
+
+.modal-table-button:hover {
+	background-color: var(--interactive-hover);
+	border-color: var(--interactive-accent);
+	transform: translateX(4px);
+}
+
+/* Roll Result Modal */
+.modal-namespace-badge {
+	font-size: 0.8em;
+	opacity: 0.7;
+	font-weight: normal;
+}
+
+.modal-namespace-link {
+	cursor: pointer;
+	color: var(--text-accent);
+	text-decoration: none;
+}
+
+.modal-namespace-link:hover {
+	text-decoration: underline;
+}
+
+.modal-result-column {
+	margin-bottom: 8px;
+}
+
+.modal-result-text {
+	margin-bottom: 8px;
+}
+
+.modal-result-details {
+	margin-bottom: 12px;
+}
+
+.modal-roll-value {
+	margin-bottom: 8px;
+	opacity: 0.7;
+	font-size: 0.9em;
+}
+
+.modal-nested-header {
+	font-weight: bold;
+	margin-top: 12px;
+	margin-bottom: 8px;
+}
+
+.modal-nested-roll {
+	margin-left: 20px;
+	padding-left: 12px;
+	border-left: 3px solid var(--background-modifier-border);
+	margin-top: 12px;
+}
+
+/* Modifier Preview Modal */
+.modal-info-text {
+	font-size: 13px;
+	opacity: 0.8;
+	margin-bottom: 16px;
+}
+
+.modal-modifier-section {
+	margin-bottom: 20px;
+}
+
+.modal-modifier-label {
+	font-weight: 600;
+	margin-bottom: 8px;
+	font-size: 15px;
+}
+
+.modal-modifier-badge {
+	font-size: 12px;
+	opacity: 0.7;
+	font-weight: normal;
+}
+
+.modal-input-container {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+}
+
+.modal-modifier-input {
+	width: 100px;
+	padding: 8px 12px;
+	border-radius: 4px;
+	border: 1px solid var(--background-modifier-border);
+	font-size: 14px;
+	background: var(--background-primary);
+}
+
+.modal-input-hint {
+	opacity: 0.7;
+}
+
+.modal-note {
+	margin-top: 16px;
+	padding: 12px;
+	background-color: var(--background-secondary);
+	border-radius: 6px;
+	font-size: 13px;
+}
+
+/* Save File Modal */
+.modal-input-section {
+	margin-top: 16px;
+	margin-bottom: 16px;
+}
+
+.modal-label {
+	display: block;
+	margin-bottom: 8px;
+	font-weight: 500;
+}
+
+.modal-filename-input {
+	width: 100%;
+	padding: 8px 12px;
+	border-radius: 4px;
+	border: 1px solid var(--background-modifier-border);
+	font-size: 14px;
+	background: var(--background-primary);
+}
+
+.modal-extension {
+	margin-left: 4px;
+	opacity: 0.7;
+}
+
+/* Error Modal */
+.modal-error-message {
+	margin-top: 16px;
+	margin-bottom: 24px;
+	line-height: 1.6;
+	white-space: pre-wrap;
+}
+
+
+/* ============================================
+   FILE PICKER MODAL
+   ============================================ */
+
+.file-list,
+.table-list {
+	max-height: 400px;
+	overflow-y: auto;
+	margin-bottom: 16px;
+}
+
+.file-option,
+.table-option {
+	display: block;
+	width: 100%;
+	text-align: left;
+	padding: 8px;
+	margin-bottom: 4px;
+	border: 1px solid var(--background-modifier-border);
+	background: var(--background-secondary);
+	cursor: pointer;
+	font-size: 13px;
+	border-radius: 4px;
+	transition: all 0.1s ease;
+}
+
+.file-option:hover,
+.table-option:hover {
+	background: var(--background-modifier-hover);
+	border-color: var(--interactive-accent);
+}
+
+/* ============================================
+   MODAL FORM ELEMENTS
+   ============================================ */
+
+.modal input[type="text"],
+.modal input[type="number"] {
+	width: 100%;
+	padding: 8px;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 4px;
+	background: var(--background-primary);
+	font-size: 13px;
+	margin-bottom: 12px;
+}
+
+.modal input[type="text"]:focus,
+.modal input[type="number"]:focus {
+	outline: none;
+	border-color: var(--interactive-accent);
+	box-shadow: 0 0 0 1px var(--interactive-accent);
+}
+
+.modal select {
+	width: 100%;
+	padding: 8px;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 4px;
+	background: var(--background-primary);
+	cursor: pointer;
+	font-size: 13px;
+	margin-bottom: 12px;
+}
+
+.modal select:hover {
+	border-color: var(--interactive-accent);
+}
+
+.modal label {
+	display: block;
+	margin-bottom: 4px;
+	font-size: 13px;
+	font-weight: 500;
+}
+
+/* ============================================
+   MODAL VALIDATION STYLES
+   ============================================ */
+
+.modal ul {
+	margin: 12px 0;
+	padding-left: 24px;
+}
+
+.modal li {
+	margin-bottom: 8px;
+	font-size: 13px;
+	color: var(--text-error);
+}
+
+/* ============================================
+   UTILITY CLASSES
+   ============================================ */
+
+.hidden {
+	display: none !important;
+}
+
+.disabled {
+	opacity: 0.6;
+	cursor: not-allowed !important;
+	pointer-events: none;
+}
+
+/* ============================================
+   RESPONSIVE ADJUSTMENTS
+   ============================================ */
+
+@media (max-width: 768px) {
+	.table-builder-split {
+		flex-direction: column;
+	}
+	
+	.table-builder-left-panel,
+	.table-builder-right-panel {
+		flex: none;
+		width: 100%;
+	}
+	
+	.table-builder-toolbar {
+		flex-direction: column;
+	}
+	
+	.table-builder-toolbar .table-builder-btn {
+		width: 100%;
+	}
+	
+	.export-buttons {
+		flex-direction: column;
+	}
+	
+	.export-buttons .table-builder-btn {
+		width: 100%;
+	}
+}
+
+/* ============================================
+   SCROLLBAR STYLING (WEBKIT)
+   ============================================ */
+
+.table-builder-left-panel::-webkit-scrollbar,
+.preview-container::-webkit-scrollbar,
+.file-list::-webkit-scrollbar {
+	width: 8px;
+	height: 8px;
+}
+
+.table-builder-left-panel::-webkit-scrollbar-track,
+.preview-container::-webkit-scrollbar-track,
+.file-list::-webkit-scrollbar-track {
+	background: var(--background-primary);
+}
+
+.table-builder-left-panel::-webkit-scrollbar-thumb,
+.preview-container::-webkit-scrollbar-thumb,
+.file-list::-webkit-scrollbar-thumb {
+	background: var(--background-modifier-border);
+	border-radius: 4px;
+}
+
+.table-builder-left-panel::-webkit-scrollbar-thumb:hover,
+.preview-container::-webkit-scrollbar-thumb:hover,
+.file-list::-webkit-scrollbar-thumb:hover {
+	background: var(--text-muted);
+}
+
+/* ============================================
+   ACCESSIBILITY
+   ============================================ */
+
+.table-builder-btn:focus,
+.table-builder-btn-small:focus,
+.tab-btn:focus,
+button:focus {
+	outline: 2px solid var(--interactive-accent);
+	outline-offset: 2px;
+}
+
+.row-action-btn:focus-visible {
+	outline: 2px solid var(--interactive-accent);
+	outline-offset: 1px;
+}
+
+/* Focus within for keyboard navigation */
+.grid-cell input:focus-visible,
+.column-item input:focus-visible,
+.directive-item input:focus-visible {
+	outline: 2px solid var(--interactive-accent);
+	outline-offset: 1px;
+}
+
+/* ============================================
+   THEME SUPPORT - DARK MODE ADJUSTMENTS
+   ============================================ */
+
+.theme-dark .column-context-menu {
+	box-shadow: 0 2px 12px rgba(0, 0, 0, 0.3);
+}
+
+.theme-dark .badge {
+	background: var(--background-modifier-border);
+}
+
+/* ============================================
+   ANIMATION & TRANSITIONS
+   ============================================ */
+
+@keyframes fadeIn {
+	from {
+		opacity: 0;
+		transform: translateY(-4px);
+	}
+	to {
+		opacity: 1;
+		transform: translateY(0);
+	}
+}
+
+.column-context-menu {
+	animation: fadeIn 0.15s ease-out;
+}
+
+.row-grid-row.selected {
+	animation: fadeIn 0.1s ease-out;
+}
+
+/* ============================================
+   PRINT STYLES
+   ============================================ */
+
+@media print {
+	.table-builder-toolbar,
+	.export-buttons,
+	.examples-sidebar,
+	.preview-tabs {
+		display: none;
+	}
+	
+	.table-builder-split {
+		flex-direction: column;
+	}
+	
+	.preview-container {
+		border: none;
+	}
+}
+
+/* ============================================
+   END OF STYLES
+   ============================================ */
