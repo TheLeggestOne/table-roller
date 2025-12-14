@@ -1,0 +1,10 @@
+{
+	"id": "table-roller",
+	"name": "Table Roller",
+	"version": "1.2.2",
+	"minAppVersion": "0.15.0",
+	"description": "Roll on random tables",
+	"author": "TheLeggestOne",
+	"authorUrl": "",
+	"isDesktopOnly": false
+}

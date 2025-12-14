@@ -1,17 +1,24 @@
 {
-  "name": "table-helper",
-  "version": "1.0.0",
-  "description": "Markdown table manager with random rolling and chaining capabilities",
-  "main": "index.js",
-  "type": "module",
+  "name": "table-roller",
+  "version": "1.2.2",
+  "description": "Obsidian plugin for rolling on random tables",
+  "main": "main.js",
   "scripts": {
-    "start": "node index.js",
-    "test": "node test.js",
-    "roll": "node index.js roll",
-    "load": "node index.js load",
-    "dice": "node index.js dice"
+    "dev": "node esbuild.config.mjs",
+    "build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production",
+    "version": "node version-bump.mjs && git add manifest.json versions.json"
   },
-  "keywords": ["markdown", "tables", "random", "dice", "rpg"],
+  "keywords": [],
   "author": "",
-  "license": "MIT"
+  "license": "MIT",
+  "devDependencies": {
+    "@types/node": "^16.11.6",
+    "@typescript-eslint/eslint-plugin": "5.29.0",
+    "@typescript-eslint/parser": "5.29.0",
+    "builtin-modules": "^3.3.0",
+    "esbuild": "0.17.3",
+    "obsidian": "latest",
+    "tslib": "2.4.0",
+    "typescript": "4.7.4"
+  }
 }
