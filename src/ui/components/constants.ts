@@ -1,0 +1,1 @@
+export const TABLE_ROLLER_VIEW_TYPE = 'table-roller-core-view';
