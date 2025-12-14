@@ -1,167 +1,80 @@
-import { Plugin } from 'obsidian';
-import { TableRollerCore } from './src/services/TableRollerCore';
-import { TableSelectorModal, RollResultModal, ErrorModal } from './src/ui/modals';
-import { TableBuilderView, VIEW_TYPE_TABLE_BUILDER } from './src/ui/TableBuilderView';
+import { ItemView, WorkspaceLeaf, Plugin } from 'obsidian';
+import { TableStore } from 'src/stores/table-store';
+import TableDisplay from 'src/ui/components/TableDisplay.svelte';
+
+import { mount, unmount } from 'svelte';
+
+export const TABLE_ROLLER_VIEW_TYPE = 'table-roller-core-view';
 
 export default class TableRollerPlugin extends Plugin {
-	private roller: TableRollerCore;
+  tableStore: TableStore = new TableStore(this.app);
 
-	async onload() {
-		console.log('Loading Table Roller plugin');
+  async onload() {
+    this.registerView(
+      TABLE_ROLLER_VIEW_TYPE,
+      (leaf) => new TableSideView(leaf, this.tableStore)
+    );
 
-		this.roller = new TableRollerCore(this.app);
+    this.addRibbonIcon('dice', 'Table Roller', () => {
+      this.activateView();
+    });
+  }
 
-		// Register the table builder view
-		this.registerView(
-			VIEW_TYPE_TABLE_BUILDER,
-			(leaf) => new TableBuilderView(leaf, this.roller)
-		);
+  async onunload() {
+  }
 
-		// Load tables on startup
-		try {
-			await this.roller.loadTables();
-		} catch (error) {
-			console.error('Error loading tables:', error);
-		}
+  async activateView() {
+    const { workspace } = this.app;
 
-		// Register commands
-		this.addCommand({
-			id: 'open-table-builder',
-			name: 'Create/Edit Table',
-			callback: async () => {
-				const leaf = this.app.workspace.getLeaf('tab');
-				await leaf.setViewState({
-					type: VIEW_TYPE_TABLE_BUILDER,
-					active: true
-				});
-			}
-		});
+    let leaf = workspace.getLeavesOfType(TABLE_ROLLER_VIEW_TYPE)[0];
 
-		this.addRibbonIcon('table', 'Create/Edit Table', async () => {
-			const leaf = this.app.workspace.getLeaf('tab');
-			await leaf.setViewState({
-				type: VIEW_TYPE_TABLE_BUILDER,
-				active: true
-			});
-		});
+    if (!leaf) {
+      const rightLeaf = workspace.getRightLeaf(false);
+      if (rightLeaf) {
+        await rightLeaf.setViewState({
+          type: TABLE_ROLLER_VIEW_TYPE,
+          active: true,
+        });
+        leaf = rightLeaf;
+      }
+    }
 
-		this.addCommand({
-			id: 'roll-on-table',
-			name: 'Roll on table',
-			callback: () => {
-				const tables = this.roller.getTableNames();
+    if (leaf) {
+      workspace.revealLeaf(leaf);
+    }
+  }
+}
 
-				if (tables.length === 0) {
-					console.warn('No tables found with table-roller frontmatter');
-					return;
-				}
+export class TableSideView extends ItemView {
+  tableDisplay: ReturnType<typeof TableDisplay> | undefined;
+  tableStore: TableStore;
 
-				const selectorModal = new TableSelectorModal(this.app, tables, (tableNameWithModifier) => {
-					try {
-						// Parse modifier syntax: TableName@modifier
-						let tableName = tableNameWithModifier;
-						let modifier = 0;
-						
-						if (tableNameWithModifier.includes('@')) {
-							const parts = tableNameWithModifier.split('@');
-							tableName = parts[0];
-							modifier = parseInt(parts[1]) || 0;
-						}
-						
-						const showRollNumbers = selectorModal.showRollNumbers;
-						
-						const performRoll = () => {
-							const result = this.roller.roll(tableName, undefined, modifier);
-							new RollResultModal(this.app, result, performRoll, showRollNumbers).open();
-						};
-						
-						performRoll();
-					} catch (error) {
-						const errorMessage = error instanceof Error ? error.message : String(error);
-						
-						// Check if this is an ambiguous table reference error
-						if (errorMessage.includes('Ambiguous table reference')) {
-							new ErrorModal(this.app, 'Ambiguous Table Reference', errorMessage).open();
-						} else {
-							// Show generic error modal for other errors
-							new ErrorModal(this.app, 'Error', `Failed to roll on table:\n\n${errorMessage}`).open();
-						}
-						console.error('Error rolling on table:', error);
-					}
-				}, this.roller);
-				selectorModal.open();
-			}
-		});
+  constructor(leaf: WorkspaceLeaf, tableStore: TableStore) {
+    super(leaf);
+    this.tableStore = tableStore;
+  }
 
-		this.addCommand({
-			id: 'mark-as-table',
-			name: 'Mark current file as table',
-			callback: async () => {
-				const activeFile = this.app.workspace.getActiveFile();
-				if (!activeFile || activeFile.extension !== 'md') {
-					console.warn('No active markdown file');
-					return;
-				}
+  getViewType() {
+    return TABLE_ROLLER_VIEW_TYPE;
+  }
 
-				try {
-					const content = await this.app.vault.read(activeFile);
-					const lines = content.split('\n');
-					
-					// Check if frontmatter exists
-					if (lines[0] === '---') {
-						// Find end of frontmatter
-						let endIndex = -1;
-						for (let i = 1; i < lines.length; i++) {
-							if (lines[i] === '---') {
-								endIndex = i;
-								break;
-							}
-						}
-						
-						if (endIndex > 0) {
-							// Check if table-roller property exists
-							let hasProperty = false;
-							for (let i = 1; i < endIndex; i++) {
-								if (lines[i].match(/^table-roller\s*:/)) {
-									lines[i] = 'table-roller: true';
-									hasProperty = true;
-									break;
-								}
-							}
-							
-							// Add property if it doesn't exist
-							if (!hasProperty) {
-								lines.splice(endIndex, 0, 'table-roller: true');
-							}
-						}
-					} else {
-						// No frontmatter, add it
-						lines.unshift('---', 'table-roller: true', '---', '');
-					}
-					
-					await this.app.vault.modify(activeFile, lines.join('\n'));
-					console.log('File marked as table-roller');
-				} catch (error) {
-					console.error('Error marking file as table:', error);
-				}
-			}
-		});
+  getDisplayText() {
+    return 'Table Roller';
+  }
 
-		this.addCommand({
-			id: 'reload-tables',
-			name: 'Reload all tables',
-			callback: async () => {
-				try {
-					await this.roller.loadTables();
-					console.log('Tables reloaded successfully');
-				} catch (error) {
-					console.error('Error reloading tables:', error);
-				}
-			}
-		});
-	}
+  async onOpen() {
+    this.tableDisplay = mount(TableDisplay, {
+      target: this.contentEl,
+      props: {
+        Header: "Table Roller",
+        tableStore: this.tableStore
+      }
+    });
+  }
 
-	onunload() {
-		console.log('Unloading Table Roller plugin');
-	}
+  async onClose() {
+    if (this.tableDisplay) {
+      unmount(this.tableDisplay);
+    }
+  }
 }
