@@ -313,13 +313,12 @@ export class TableHelper {
     if (Array.isArray(result)) {
       return result.map((r, idx) => {
         const tableName = r._tableName || `Table ${idx + 1}`;
-        const formatted = this.formatSingleResult(r);
-        return `${tableName}:\n${formatted}`;
+        const formatted = this.formatSingleResult(r, 1);
+        return `# ${tableName}\n${formatted}`;
       }).join('\n\n');
     }
-    
     // Handle single result or chained results
-    return this.formatSingleResult(result);
+    return this.formatSingleResult(result, 1);
   }
 
   /**
@@ -327,72 +326,70 @@ export class TableHelper {
    * @param {Object} result - Result object
    * @returns {string} Formatted string
    */
-  formatSingleResult(result, isNested = false) {
-    const lines = [];
+  /**
+   * Format a single result (with optional chain) as markdown
+   * @param {Object} result - Result object
+   * @param {number} headingLevel - Markdown heading level (1 = #, 2 = ##, ...)
+   * @returns {string} Formatted markdown string
+   */
+  formatSingleResult(result, headingLevel = 1) {
     let current = result;
-    let level = 0;
-
-    // Build lines in natural order
     const chainedResults = [];
     while (current) {
-      chainedResults.unshift(current); // Build chain in reverse to process top-down
+      chainedResults.unshift(current);
       current = current._chain;
     }
 
-    // Process each result in the chain
+    let output = '';
     for (let i = 0; i < chainedResults.length; i++) {
       const item = chainedResults[i];
-      const indent = '  '.repeat(i);
-      
-      // Format roll with modifier if present
-      let roll = '';
-      if (item._roll !== undefined) {
-        if (item._modifier && item._modifier !== 0) {
-          const sign = item._modifier > 0 ? '+' : '';
-          roll = `[${item._baseRoll}${sign}${item._modifier}] `;
-        } else {
-          roll = `[${item._roll}] `;
-        }
-      }
-      
-      const entries = Object.entries(item)
+      const tableName = item._tableName || `Result`;
+      const heading = `${'#'.repeat(headingLevel + i)} ${tableName}`;
+
+      // Gather visible keys
+      const visibleEntries = Object.entries(item)
         .filter(([key]) => !key.startsWith('_'))
-        .filter(([key]) => key.toLowerCase() !== 'reroll') // Hide reroll column in output (case-insensitive)
-        .map(([key, value]) => `${key}: ${value}`)
-        .join(', ');
-      
-      lines.push(`${indent}${roll}${entries}`);
-      
+        .filter(([key]) => key.toLowerCase() !== 'reroll');
+
+      // Decide if we should use a table or bullet points
+      if (visibleEntries.length > 1) {
+        // Markdown table
+        const headers = visibleEntries.map(([key]) => key);
+        const values = visibleEntries.map(([_, value]) => value);
+        output += `${heading}\n| ${headers.join(' | ')} |\n|${headers.map(() => '---').join('|')}|\n| ${values.join(' | ')} |\n`;
+      } else if (visibleEntries.length === 1) {
+        // Single value as bullet point
+        const [key, value] = visibleEntries[0];
+        output += `${heading}\n- ${key}: ${value}\n`;
+      } else {
+        output += `${heading}\n(No details)\n`;
+      }
+
       // Add reroll results if they exist
       if (item._rerolls) {
         if (Array.isArray(item._rerolls)) {
           // Group rerolls by table name
           const groupedRerolls = new Map();
           item._rerolls.forEach(reroll => {
-            const tableName = reroll._tableName || 'Reroll';
-            if (!groupedRerolls.has(tableName)) {
-              groupedRerolls.set(tableName, []);
+            const rerollTable = reroll._tableName || 'Reroll';
+            if (!groupedRerolls.has(rerollTable)) {
+              groupedRerolls.set(rerollTable, []);
             }
-            groupedRerolls.get(tableName).push(reroll);
+            groupedRerolls.get(rerollTable).push(reroll);
           });
-
-          // Format each group
-          groupedRerolls.forEach((rerolls, tableName) => {
-            lines.push('  '.repeat(i + 1) + `↳ ${tableName}:`);
+          groupedRerolls.forEach((rerolls, rerollTable) => {
+            output += `\n${'#'.repeat(headingLevel + i + 1)} ${rerollTable}\n`;
             rerolls.forEach(reroll => {
-              const rerollFormatted = this.formatSingleResult(reroll, true);
-              const rerollLines = rerollFormatted.split('\n').map(line => '  '.repeat(i + 1) + '↳ ' + line);
-              lines.push(...rerollLines);
+              output += this.formatSingleResult(reroll, headingLevel + i + 2) + '\n';
             });
           });
         } else {
-          const rerollFormatted = this.formatSingleResult(item._rerolls, true);
-          const rerollLines = rerollFormatted.split('\n').map(line => '  '.repeat(i + 1) + '↳ ' + line);
-          lines.push(...rerollLines);
+          const rerollTable = item._rerolls._tableName || 'Reroll';
+          output += `\n${'#'.repeat(headingLevel + i + 1)} ${rerollTable}\n`;
+          output += this.formatSingleResult(item._rerolls, headingLevel + i + 2) + '\n';
         }
       }
     }
-
-    return lines.join('\n');
+    return output.trim();
   }
 }
