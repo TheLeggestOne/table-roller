@@ -2,7 +2,7 @@ import { mount, unmount } from "svelte";
 import { ItemView, WorkspaceLeaf } from "obsidian"; 
 import type { TableStore } from "src/stores/table-store";
 import { TABLE_ROLLER_VIEW_TYPE } from "../constants";
-import TableDisplay from "./TableDisplay.svelte";
+import TableDisplay from "./TableSideViewComponent.svelte";
 
 export class TableSideView extends ItemView {
   tableDisplay: ReturnType<typeof TableDisplay> | undefined;
