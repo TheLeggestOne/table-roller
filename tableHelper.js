@@ -106,11 +106,11 @@ export class TableHelper {
 
     // Determine dice notation from table
     const diceColumn = this.getDiceColumn(table);
-    
+
     // Roll with duplicate prevention
     let attempts = 0;
     let rollResult;
-    
+
     do {
       rollResult = DiceRoller.rollOnTable(table.rows, diceColumn, modifier);
       attempts++;
@@ -126,7 +126,7 @@ export class TableHelper {
 
     this.tracker.addResult(sessionId, actualTableName, rollResult);
     rollResult._tableName = actualTableName;
-    
+
     // Check for reroll column (case-insensitive)
     const rerollKey = Object.keys(rollResult).find(key => key.toLowerCase() === 'reroll');
     if (rerollKey) {
@@ -136,12 +136,25 @@ export class TableHelper {
           rerollExpression.trim() !== '' && 
           rerollExpression.trim() !== '—' && 
           rerollExpression.trim() !== '-') {
-        // Recursively roll on the reroll expression
-        const rerollResults = this.roll(rerollExpression, sessionId, maxAttempts);
-        rollResult._rerolls = rerollResults;
+        // Support ndX TableName reroll expressions (e.g., '1d4 MagicB')
+        const ndxMatch = rerollExpression.match(/^(\d*d\d+)(?:\s+)(.+)$/i);
+        if (ndxMatch) {
+          const dice = ndxMatch[1];
+          const rerollTable = ndxMatch[2].trim();
+          const count = DiceRoller.roll(dice);
+          const results = [];
+          for (let i = 0; i < count; i++) {
+            results.push(this.roll(rerollTable, sessionId, maxAttempts));
+          }
+          rollResult._rerolls = results;
+        } else {
+          // Recursively roll on the reroll expression (existing behavior)
+          const rerollResults = this.roll(rerollExpression, sessionId, maxAttempts);
+          rollResult._rerolls = rerollResults;
+        }
       }
     }
-    
+
     return rollResult;
   }
 
@@ -313,12 +326,13 @@ export class TableHelper {
     if (Array.isArray(result)) {
       return result.map((r, idx) => {
         const tableName = r._tableName || `Table ${idx + 1}`;
-        const formatted = this.formatSingleResult(r, 1);
+        const formatted = this.formatSingleResult(r, false, tableName);
         return `# ${tableName}\n${formatted}`;
       }).join('\n\n');
     }
     // Handle single result or chained results
-    return this.formatSingleResult(result, 1);
+    const tableName = result._tableName || 'Result';
+    return `# ${tableName}\n${this.formatSingleResult(result, false, tableName)}`;
   }
 
   /**
@@ -332,7 +346,7 @@ export class TableHelper {
    * @param {number} headingLevel - Markdown heading level (1 = #, 2 = ##, ...)
    * @returns {string} Formatted markdown string
    */
-  formatSingleResult(result, headingLevel = 1) {
+  formatSingleResult(result, isSubtable = false, parentTableName = null, tableCounts = {}) {
     let current = result;
     const chainedResults = [];
     while (current) {
@@ -341,31 +355,53 @@ export class TableHelper {
     }
 
     let output = '';
-    for (let i = 0; i < chainedResults.length; i++) {
-      const item = chainedResults[i];
-      const tableName = item._tableName || `Result`;
-      const heading = `${'#'.repeat(headingLevel + i)} ${tableName}`;
+    let counts = tableCounts;
+    if (!counts) counts = {};
 
-      // Gather visible keys
-      const visibleEntries = Object.entries(item)
-        .filter(([key]) => !key.startsWith('_'))
-        .filter(([key]) => key.toLowerCase() !== 'reroll');
+    // Group results by table name
+    const tableGroups = {};
+    for (const item of chainedResults) {
+      const tableName = item._tableName || 'Result';
+      if (!tableGroups[tableName]) tableGroups[tableName] = [];
+      tableGroups[tableName].push(item);
+    }
 
-      // Decide if we should use a table or bullet points
-      if (visibleEntries.length > 1) {
-        // Markdown table
-        const headers = visibleEntries.map(([key]) => key);
-        const values = visibleEntries.map(([_, value]) => value);
-        output += `${heading}\n| ${headers.join(' | ')} |\n|${headers.map(() => '---').join('|')}|\n| ${values.join(' | ')} |\n`;
-      } else if (visibleEntries.length === 1) {
-        // Single value as bullet point
-        const [key, value] = visibleEntries[0];
-        output += `${heading}\n- ${key}: ${value}\n`;
+    // Only show the main table heading (handled in formatResult)
+    let first = true;
+    for (const [tableName, items] of Object.entries(tableGroups)) {
+      if (first) {
+        // Main table: show as bullet points or table
+        const item = items[0];
+        const visibleEntries = Object.entries(item)
+          .filter(([key]) => !key.startsWith('_'))
+          .filter(([key]) => key.toLowerCase() !== 'reroll')
+          .filter(([key]) => !/^d\d+$/i.test(key));
+        if (visibleEntries.length > 1) {
+          visibleEntries.forEach(([key, value]) => {
+            output += `- ${key}: ${value}\n`;
+          });
+        } else if (visibleEntries.length === 1) {
+          const [key, value] = visibleEntries[0];
+          output += `- ${key}: ${value}\n`;
+        }
+        first = false;
       } else {
-        output += `${heading}\n(No details)\n`;
+        // Subtable: group all results into a single table
+        output += `\n#### ${tableName}\n`;
+        // Collect all unique keys
+        const allKeys = Array.from(new Set(items.flatMap(item => Object.keys(item).filter(key => !key.startsWith('_') && key.toLowerCase() !== 'reroll' && !/^d\d+$/i.test(key)))));
+        if (allKeys.length > 0) {
+          output += `| ${allKeys.join(' | ')} |\n|${allKeys.map(() => '---').join('|')}|\n`;
+          for (const item of items) {
+            const row = allKeys.map(key => item[key] !== undefined ? item[key] : '').join(' | ');
+            output += `| ${row} |\n`;
+          }
+        }
       }
+    }
 
-      // Add reroll results if they exist
+    // Add reroll results if they exist
+    for (const item of chainedResults) {
       if (item._rerolls) {
         if (Array.isArray(item._rerolls)) {
           // Group rerolls by table name
@@ -378,15 +414,26 @@ export class TableHelper {
             groupedRerolls.get(rerollTable).push(reroll);
           });
           groupedRerolls.forEach((rerolls, rerollTable) => {
-            output += `\n${'#'.repeat(headingLevel + i + 1)} ${rerollTable}\n`;
-            rerolls.forEach(reroll => {
-              output += this.formatSingleResult(reroll, headingLevel + i + 2) + '\n';
-            });
+            if (rerolls.length > 1) {
+              output += `\n#### ${rerollTable}\n`;
+              // Collect all unique keys
+              const allKeys = Array.from(new Set(rerolls.flatMap(item => Object.keys(item).filter(key => !key.startsWith('_') && key.toLowerCase() !== 'reroll' && !/^d\d+$/i.test(key)))));
+              if (allKeys.length > 0) {
+                output += `| ${allKeys.join(' | ')} |\n|${allKeys.map(() => '---').join('|')}|\n`;
+                for (const item of rerolls) {
+                  const row = allKeys.map(key => item[key] !== undefined ? item[key] : '').join(' | ');
+                  output += `| ${row} |\n`;
+                }
+              }
+            } else {
+              rerolls.forEach(reroll => {
+                output += this.formatSingleResult(reroll, true, item._tableName, counts) + '\n';
+              });
+            }
           });
         } else {
           const rerollTable = item._rerolls._tableName || 'Reroll';
-          output += `\n${'#'.repeat(headingLevel + i + 1)} ${rerollTable}\n`;
-          output += this.formatSingleResult(item._rerolls, headingLevel + i + 2) + '\n';
+          output += this.formatSingleResult(item._rerolls, true, item._tableName, counts) + '\n';
         }
       }
     }
