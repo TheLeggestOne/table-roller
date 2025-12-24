@@ -1,5 +1,7 @@
+
 import fs from 'fs';
 import { TableHelper } from './tableHelper.js';
+import { DiceRoller } from './diceRoller.js';
 
 const helper = new TableHelper();
 
@@ -17,34 +19,61 @@ if (process.argv.length > 2) {
       console.error('Error:', error.message);
     }
   } else if (command === 'roll') {
-    // Load tables and roll
-    const expression = process.argv[3];
-    
-    if (!expression) {
-      console.error('Error: No roll expression provided');
-      printUsage();
-      process.exit(1);
-    }
-    
-    // Check for modifier in expression or as separate argument
+    // Support: pnpm roll 10 dnd.race, pnpm roll 1d2 dnd.race, or pnpm roll dnd.race 10
+    let times = 1;
+    let tableExpression = process.argv[3];
     let modifier = 0;
-    let tableExpression = expression;
-    
-    // Check if expression contains a modifier (e.g., "TableName +5")
-    const modMatch = expression.match(/^(.+?)\s*([+\-]\d+)$/);
+    let argIdx = 4;
+    // If the first argument is a number or dice notation, treat as times
+    if (/^\d+$/.test(tableExpression) || /^(\d*)d\d+([+\-]\d+)?$/i.test(tableExpression)) {
+      try {
+        times = /^\d+$/.test(tableExpression)
+          ? parseInt(tableExpression, 10)
+          : DiceRoller.roll(tableExpression);
+      } catch (e) {
+        console.error('Invalid dice notation for number of rolls:', tableExpression);
+        process.exit(1);
+      }
+      tableExpression = process.argv[4];
+      argIdx = 5;
+    }
+    // Or if the next argument is a number or dice notation, treat as times
+    else if (process.argv[4] && (/^\d+$/.test(process.argv[4]) || /^(\d*)d\d+([+\-]\d+)?$/i.test(process.argv[4]))) {
+      try {
+        times = /^\d+$/.test(process.argv[4])
+          ? parseInt(process.argv[4], 10)
+          : DiceRoller.roll(process.argv[4]);
+      } catch (e) {
+        console.error('Invalid dice notation for number of rolls:', process.argv[4]);
+        process.exit(1);
+      }
+      argIdx = 5;
+    }
+    // Check for modifier in expression or as separate argument
+    const modMatch = tableExpression.match(/^(.+?)\s*([+\-]\d+)$/);
     if (modMatch) {
       tableExpression = modMatch[1].trim();
       modifier = parseInt(modMatch[2], 10);
-    } else if (process.argv[4] && /^[+\-]\d+$/.test(process.argv[4])) {
-      // Check if next argument is a modifier
-      modifier = parseInt(process.argv[4], 10);
+    } else if (process.argv[argIdx] && /^[+\-]\d+$/.test(process.argv[argIdx])) {
+      modifier = parseInt(process.argv[argIdx], 10);
     }
-    
     try {
       helper.loadTablesSync('./tables');
-      const result = helper.roll(tableExpression, 'default', 100, modifier);
+      let result;
+      if (times > 1) {
+        // Roll N times on the same table
+        result = Array.from({ length: times }, () => helper.roll(tableExpression, 'default', 100, modifier));
+      } else {
+        result = helper.roll(tableExpression, 'default', 100, modifier);
+      }
       console.log('\nRoll Result:');
-      console.log(helper.formatResult(result));
+      if (Array.isArray(result)) {
+        result.forEach((r, i) => {
+          console.log(`\n# Roll ${i + 1}\n${helper.formatResult(r)}`);
+        });
+      } else {
+        console.log(helper.formatResult(result));
+      }
     } catch (error) {
       console.error('Error:', error.message);
     }

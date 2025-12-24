@@ -127,33 +127,57 @@ export class TableHelper {
     this.tracker.addResult(sessionId, actualTableName, rollResult);
     rollResult._tableName = actualTableName;
 
-    // Check for reroll column (case-insensitive)
-    const rerollKey = Object.keys(rollResult).find(key => key.toLowerCase() === 'reroll');
-    if (rerollKey) {
-      const rerollExpression = rollResult[rerollKey];
-      // Skip empty values, dashes, and whitespace
-      if (rerollExpression && 
-          rerollExpression.trim() !== '' && 
-          rerollExpression.trim() !== '—' && 
-          rerollExpression.trim() !== '-') {
-        // Support ndX TableName reroll expressions (e.g., '1d4 MagicB')
-        const ndxMatch = rerollExpression.match(/^(\d*d\d+)(?:\s+)(.+)$/i);
-        if (ndxMatch) {
-          const dice = ndxMatch[1];
-          const rerollTable = ndxMatch[2].trim();
-          const count = DiceRoller.roll(dice);
-          const results = [];
-          for (let i = 0; i < count; i++) {
-            results.push(this.roll(rerollTable, sessionId, maxAttempts));
+      // Check for reroll column (case-insensitive)
+      const rerollKey = Object.keys(rollResult).find(key => key.toLowerCase() === 'reroll');
+      if (rerollKey) {
+        const rerollExpression = rollResult[rerollKey];
+        // Skip empty values, dashes, and whitespace
+        if (rerollExpression &&
+            rerollExpression.trim() !== '' &&
+            rerollExpression.trim() !== '—' &&
+            rerollExpression.trim() !== '-') {
+          // Support multiple comma-separated reroll expressions
+          // e.g., '1d4+2 TableA, 1d4+4 TableB'
+          const rerollParts = rerollExpression.split(',').map(s => s.trim()).filter(Boolean);
+          let allResults = [];
+          let groupedResults = {};
+          let simpleReroll = false;
+          for (const part of rerollParts) {
+            // Try to match dice+modifier and table name: e.g., '1d4+2 TableA'
+            const ndxMatch = part.match(/^(\d*d\d+(?:[+\-]\d+)?)(?:\s+)(.+)$/i);
+            if (ndxMatch) {
+              const dice = ndxMatch[1];
+              const rerollTable = ndxMatch[2].trim();
+              const count = DiceRoller.roll(dice);
+              const results = [];
+              for (let i = 0; i < count; i++) {
+                results.push(this.roll(rerollTable, sessionId, maxAttempts));
+              }
+              // Group results by table name
+              if (!groupedResults[rerollTable]) groupedResults[rerollTable] = [];
+              groupedResults[rerollTable].push(...results);
+              allResults.push(...results);
+            } else {
+              // If not dice+table, treat as a simple reroll expression (existing behavior)
+              simpleReroll = true;
+              const rerollResults = this.roll(part, sessionId, maxAttempts);
+              // If rerollResults is array, add all; else, add single
+              if (Array.isArray(rerollResults)) {
+                allResults.push(...rerollResults);
+              } else {
+                allResults.push(rerollResults);
+              }
+            }
           }
-          rollResult._rerolls = results;
-        } else {
-          // Recursively roll on the reroll expression (existing behavior)
-          const rerollResults = this.roll(rerollExpression, sessionId, maxAttempts);
-          rollResult._rerolls = rerollResults;
+          // If all rerolls were dice+table, group by table; else, just return allResults as array
+          if (Object.keys(groupedResults).length > 1 && !simpleReroll) {
+            // Flatten grouped results into a single array for compatibility
+            rollResult._rerolls = allResults;
+          } else if (allResults.length > 0) {
+            rollResult._rerolls = allResults.length === 1 ? allResults[0] : allResults;
+          }
         }
       }
-    }
 
     return rollResult;
   }
