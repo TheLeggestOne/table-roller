@@ -1,5 +1,6 @@
 import { TableParser } from './tableParser.js';
 import { DiceRoller } from './diceRoller.js';
+import { resolveDiceInBrackets } from './diceRoller.js';
 import { SessionTracker } from './sessionTracker.js';
 import fs from 'fs';
 import path from 'path';
@@ -390,7 +391,6 @@ export class TableHelper {
       tableGroups[tableName].push(item);
     }
 
-    // Only show the main table heading (handled in formatResult)
     let first = true;
     for (const [tableName, items] of Object.entries(tableGroups)) {
       if (first) {
@@ -402,11 +402,19 @@ export class TableHelper {
           .filter(([key]) => !/^d\d+$/i.test(key));
         if (visibleEntries.length > 1) {
           visibleEntries.forEach(([key, value]) => {
-            output += `- ${key}: ${value}\n`;
+            let displayValue = value;
+            if (typeof displayValue === 'string' && displayValue.includes('[')) {
+              displayValue = resolveDiceInBrackets(displayValue);
+            }
+            output += `- ${key}: ${displayValue}\n`;
           });
         } else if (visibleEntries.length === 1) {
           const [key, value] = visibleEntries[0];
-          output += `- ${key}: ${value}\n`;
+          let displayValue = value;
+          if (typeof displayValue === 'string' && displayValue.includes('[')) {
+            displayValue = resolveDiceInBrackets(displayValue);
+          }
+          output += `- ${key}: ${displayValue}\n`;
         }
         first = false;
       } else {
@@ -417,7 +425,13 @@ export class TableHelper {
         if (allKeys.length > 0) {
           output += `| ${allKeys.join(' | ')} |\n|${allKeys.map(() => '---').join('|')}|\n`;
           for (const item of items) {
-            const row = allKeys.map(key => item[key] !== undefined ? item[key] : '').join(' | ');
+            const row = allKeys.map(key => {
+              let cell = item[key] !== undefined ? item[key] : '';
+              if (typeof cell === 'string' && cell.includes('[')) {
+                cell = resolveDiceInBrackets(cell);
+              }
+              return cell;
+            }).join(' | ');
             output += `| ${row} |\n`;
           }
         }

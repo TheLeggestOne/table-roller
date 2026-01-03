@@ -1,3 +1,4 @@
+import { resolveDiceInBrackets } from './diceRoller.js';
 /**
  * Parses markdown tables from text
  */
@@ -82,7 +83,11 @@ export class TableParser {
       if (row.length > 0) {
         const rowObj = {};
         headers.forEach((header, idx) => {
-          rowObj[header] = row[idx] || '';
+          let val = row[idx] || '';
+          if (typeof val === 'string' && val.includes('[')) {
+            val = resolveDiceInBrackets(val);
+          }
+          rowObj[header] = val;
         });
         rows.push(rowObj);
       }

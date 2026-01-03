@@ -1,3 +1,40 @@
+
+// Static utility function, not a class method, to avoid hoisting/strict mode issues
+export function resolveDiceInBrackets(str) {
+  if (typeof str !== 'string') return str;
+  return str.replace(/\[([^\]]+)\]/g, (match, expr) => {
+    // Normalize x and × to *
+    let cleaned = expr.replace(/[x×]/gi, '*').replace(/\s+/g, '');
+    // Find dice part (e.g., 2d10, 1d100, etc.)
+    const diceMatch = cleaned.match(/^(\d*d\d+(?:[+\-]\d+)?)((?:[*/+-]\d+)+)?$/i);
+    if (diceMatch) {
+      let val = DiceRoller.roll(diceMatch[1]);
+      let rest = diceMatch[2] || '';
+      // Evaluate the rest (e.g., *100, +15, /3)
+      while (rest) {
+        const opMatch = rest.match(/^([*/+-])(\d+)(.*)$/);
+        if (!opMatch) break;
+        const op = opMatch[1];
+        const num = parseInt(opMatch[2], 10);
+        if (op === '+') val += num;
+        else if (op === '-') val -= num;
+        else if (op === '*' || op === 'x') val *= num;
+        else if (op === '/') val = Math.floor(val / num);
+        rest = opMatch[3] || '';
+      }
+      return val;
+    }
+    // If not a dice expression, try to eval as math
+    try {
+      // Only allow numbers and operators
+      if (/^[\d+\-*/ ().]+$/.test(cleaned)) {
+        // eslint-disable-next-line no-eval
+        return Math.floor(eval(cleaned));
+      }
+    } catch {}
+    return match; // fallback to original
+  });
+}
 /**
  * Dice rolling and random selection utilities
  */
